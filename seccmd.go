@@ -140,7 +140,8 @@ func keyUses(top string) map[string]map[string]int {
 }
 
 const keyUsage = `usage:
-  segscan key add <name> [-scope GLOB,...]   add a key name and print its placeholder
+  segscan key add <name> [-scope GLOB,...] [-base58]
+                                             add a key name and print its placeholder
   segscan key rm <name>                      remove a key that no placeholder uses
   segscan key list                           keys, scopes and where they are used
 `
@@ -182,6 +183,7 @@ func oneArg(fs *flag.FlagSet, args []string) string {
 func keyAdd(args []string) {
 	fs := flag.NewFlagSet("key add", flag.ExitOnError)
 	scope := fs.String("scope", "", "comma-separated path globs where the key may be used")
+	b58 := fs.Bool("base58", false, "the value is always base58 (our own generated keys)")
 	name := oneArg(fs, args)
 	if !validName(name) {
 		die(fmt.Errorf("bad key name %q: use A-Z a-z 0-9 _ .", name))
@@ -191,7 +193,7 @@ func keyAdd(args []string) {
 	if l.ByName[name] != nil {
 		die(fmt.Errorf("key %s already exists: %s", name, placeholderText(name, l.ByName[name].UUID)))
 	}
-	k := &keyName{Name: name, UUID: newUUID(), Scope: splitList(*scope)}
+	k := &keyName{Name: name, UUID: newUUID(), Scope: splitList(*scope), Base58: *b58}
 	for _, s := range k.Scope {
 		if err := checkGlob(s); err != nil {
 			die(err)
@@ -235,7 +237,7 @@ func keyList(args []string) {
 	l := loadNamesOrDie(top)
 	uses := keyUses(top)
 	if !*noHeader {
-		fmt.Println("name\tuuid\tscope\tuses\tfiles")
+		fmt.Println("name\tuuid\tscope\tflags\tuses\tfiles")
 	}
 	l.format() // sorts
 	for _, k := range l.Keys {
@@ -243,7 +245,11 @@ func keyList(args []string) {
 		for _, c := range uses[k.Name] {
 			n += c
 		}
-		fmt.Printf("%s\t%s\t%s\t%d\t%d\n", k.Name, k.UUID, strings.Join(k.Scope, ","), n, len(uses[k.Name]))
+		flags := ""
+		if k.Base58 {
+			flags = "base58"
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\t%d\t%d\n", k.Name, k.UUID, strings.Join(k.Scope, ","), flags, n, len(uses[k.Name]))
 	}
 }
 

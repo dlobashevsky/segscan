@@ -15,6 +15,7 @@ import (
 type keyName struct {
 	Name, UUID string
 	Scope      []string
+	Base58     bool // the value is always base58 (flag base58)
 	Line       int
 }
 
@@ -23,7 +24,7 @@ type nameList struct {
 	ByName map[string]*keyName
 }
 
-const namesHeader = "# segscan key names: name<TAB>uuid[<TAB>scope,...]. No values here.\n"
+const namesHeader = "# segscan key names: name<TAB>uuid[<TAB>scope,...[<TAB>flags]]. No values here.\n"
 
 func validName(s string) bool {
 	if s == "" {
@@ -48,13 +49,27 @@ func parseNames(data []byte) (*nameList, []lineProblem) {
 		}
 		f := strings.Split(line, "\t")
 		bad := func(format string, a ...any) { probs = append(probs, lineProblem{no + 1, fmt.Sprintf(format, a...)}) }
-		if len(f) < 2 || len(f) > 3 {
-			bad("expected name<TAB>uuid[<TAB>scope]")
+		if len(f) < 2 || len(f) > 4 {
+			bad("expected name<TAB>uuid[<TAB>scope[<TAB>flags]]")
 			continue
 		}
 		k := &keyName{Name: f[0], UUID: f[1], Line: no + 1}
-		if len(f) == 3 {
+		if len(f) >= 3 {
 			k.Scope = splitList(f[2])
+		}
+		flagsOK := true
+		if len(f) == 4 {
+			for _, fl := range splitList(f[3]) {
+				if fl != "base58" {
+					bad("%s: unknown flag %q", k.Name, fl)
+					flagsOK = false
+					continue
+				}
+				k.Base58 = true
+			}
+		}
+		if !flagsOK {
+			continue
 		}
 		switch {
 		case !validName(k.Name):
@@ -88,8 +103,11 @@ func (l *nameList) format() []byte {
 	b.WriteString(namesHeader)
 	for _, k := range l.Keys {
 		b.WriteString(k.Name + "\t" + k.UUID)
-		if len(k.Scope) > 0 {
+		if len(k.Scope) > 0 || k.Base58 {
 			b.WriteString("\t" + strings.Join(k.Scope, ","))
+		}
+		if k.Base58 {
+			b.WriteString("\tbase58")
 		}
 		b.WriteByte('\n')
 	}

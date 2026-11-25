@@ -245,6 +245,13 @@ func TestCLIConfigRepository(t *testing.T) {
 	}
 	r.must("segscan", "key", "add", "unused")
 	r.must("segscan", "key", "rm", "unused")
+	r.must("segscan", "key", "add", "own", "-base58")
+	if list := r.must("segscan", "key", "list", "-no-header"); !strings.Contains(list, "own\t") || !strings.Contains(list, "\tbase58\t") {
+		t.Errorf("key list with flags: %q", list)
+	}
+	if names := r.read(".sec/names"); !strings.Contains(names, "\t\tbase58\n") {
+		t.Errorf("names with flags: %q", names)
+	}
 }
 
 func TestCLIWithoutSec(t *testing.T) {

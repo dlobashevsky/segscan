@@ -168,8 +168,16 @@ func TestNames(t *testing.T) {
 	if got := string(l.format()); got != namesHeader+"a\t"+testUUID+"\nb\t"+u2+"\tnodes/**\n" {
 		t.Errorf("format: %q", got)
 	}
-	_, probs = parseNames([]byte("a\t" + testUUID + "\na\t" + u2 + "\nb\t" + testUUID + "\nc-d\t" + u2 + "\ne\tnot-a-uuid\nf\n"))
-	if len(probs) != 5 {
+	// Flags: base58 with and without a scope.
+	l, probs = parseNames([]byte("a\t" + testUUID + "\t\tbase58\nb\t" + u2 + "\tnodes/**\tbase58\n"))
+	if len(probs) != 0 || !l.ByName["a"].Base58 || !l.ByName["b"].Base58 || len(l.ByName["a"].Scope) != 0 {
+		t.Fatal(l.ByName, probs)
+	}
+	if got := string(l.format()); got != namesHeader+"a\t"+testUUID+"\t\tbase58\nb\t"+u2+"\tnodes/**\tbase58\n" {
+		t.Errorf("format with flags: %q", got)
+	}
+	_, probs = parseNames([]byte("a\t" + testUUID + "\na\t" + u2 + "\nb\t" + testUUID + "\nc-d\t" + u2 + "\ne\tnot-a-uuid\nf\ng\t" + u2 + "\t\thex\n"))
+	if len(probs) != 6 {
 		t.Errorf("problems: %+v", probs)
 	}
 }
