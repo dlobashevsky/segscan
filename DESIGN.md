@@ -146,7 +146,9 @@ The file is kept sorted by name; `key add` and `key rm` rewrite it.
 
 The value is everything after the second TAB up to the end of the line,
 byte for byte: it may contain spaces, `#` and TABs and is not trimmed. It
-cannot contain LF; a multi-line value is a file in `files/`. Comment lines
+cannot contain LF; a multi-line value is a file in `files/`. It cannot be
+empty either: an empty value would match at every byte. A line with an empty
+value is an error, and `key set` refuses one (`-gen N` needs N >= 1). Comment lines
 start with `#` in the first column. There are no requirements on the length
 or strength of a value, because values are often set by other tools or other
 teams. Weak values are reported by `key check -weak`, using the scanner's
@@ -402,8 +404,10 @@ made elsewhere skipped check 6.
 because only the deploy machine runs check 6. The state holds:
 
 - the ref tips already checked;
-- for every key, a digest of name, uuid and value, and for every secret
-  file in `files/`, a digest of its name and content. Both are HMAC-SHA256
+- for every key, a digest of name, uuid, value and the sorted list of
+  transform chains used for it in the repository (6.3 step 1), so that a new
+  chain counts as a change; for every secret file in `files/`, a digest of
+  its name and content. Both are HMAC-SHA256
   with a random per-keystore salt kept in the same file, so the state does
   not help to guess a value.
 
@@ -524,7 +528,8 @@ exec segscan hook          # warn, block or off: hook_scan
 
 `.sec/hooks/pre-push` runs `segscan check -range` for every pushed ref. The
 range is `remote..local`, or `local --not --remotes` for a new ref or a
-remote commit that is not here.
+remote commit that is not here. A deleted ref (an all-zero local id) has
+nothing to check and is skipped.
 
 Both expect `segscan` in `$PATH`. If it is missing they fail with a message
 rather than pass silently.
