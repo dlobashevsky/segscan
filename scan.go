@@ -13,6 +13,7 @@ type Opts struct {
 	MinDist   int     // minimum number of distinct chars in a segment
 	KwFactor  float64 // MinExcess multiplier when a word like password/token/key precedes on the line
 	MinBpc    float64 // report only segments with at least this average cost per char
+	Skip      int     // skipOff, skipPlaceholders or skipAll: spans hidden from scoring (-skip-uuids)
 }
 
 var defaultOpts = Opts{Tau: 3.0, MinExcess: 14, MinLen: 6, MinDist: 5, KwFactor: 0.5}
@@ -62,6 +63,8 @@ type Scanner struct {
 	lc   []byte
 	kwAt int // position right after the first keyword on the line, or -1
 
+	blank []byte // the line with skipped spans blanked
+
 	explain func(piece []byte, bits float32, word bool) // debug output of the segmentation
 }
 
@@ -69,6 +72,7 @@ func NewScanner(m *Model, o Opts) *Scanner { return &Scanner{m: m, o: o} }
 
 // Line finds suspicious segments in a line. emit gets the offset and the segment.
 func (s *Scanner) Line(line []byte, emit func(col int, text []byte, bits, excess float64)) {
+	line = blankSpans(line, &s.blank, s.o.Skip)
 	s.kwAt = -1
 	if s.o.KwFactor < 1 && len(line) >= s.o.MinLen {
 		s.lc = append(s.lc[:0], line...)

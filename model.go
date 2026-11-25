@@ -302,6 +302,8 @@ type fragStat struct {
 const listWordBits = 18 // cost of a word known only from a list
 
 type trainer struct {
+	skip   int // spans to leave out, as Opts.Skip
+	blank  []byte
 	frag   map[string]*fragStat
 	tokens uint64
 	files  int
@@ -351,6 +353,7 @@ func (t *trainer) addWords(data []byte) {
 
 // addLine collects and counts the letter fragments (words) of a line.
 func (t *trainer) addLine(s []byte) {
+	s = blankSpans(s, &t.blank, t.skip)
 	t.a = annotate(s, t.a)
 	fs := -1
 	flush := func(end int) {

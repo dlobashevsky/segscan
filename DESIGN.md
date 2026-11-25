@@ -332,35 +332,49 @@ Needs the keystore.
 ### 6.5 `check`
 
 ```
-segscan check [--staged | --range A..B | --all]
+segscan check [-staged | -range REVS | -all] [-json] [-no-header]
 ```
 
-Blocking checks (exit 1):
+Without a flag it checks the working tree: tracked files and untracked files
+that are not ignored.
 
-1. **Grammar.** Every `!SECKEY_` is a well-formed placeholder (5.1) with
+Blocking checks (exit 1). The `check` column of the output names them as
+given in brackets:
+
+1. **Grammar** (`grammar`). Every `!SECKEY_` is a well-formed placeholder (5.1) with
    known transforms.
-2. **Names.** Every placeholder's name and uuid are in `names`, and are used
+2. **Names** (`names`). Every placeholder's name and uuid are in `names`, and are used
    inside its scope.
-3. **Manifest.** Every file under a node root has a manifest entry, and every
+3. **Manifest** (`manifest`). Every file under a node root has a manifest entry, and every
    type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
    Owner and group must not be empty. Whether they exist on the node is
    checked on install (4.4).
-4. **Forbidden paths.** No staged path matches `forbid`, the keystore path or
+4. **Forbidden paths** (`forbidden`). No path matches `forbid`, the keystore path or
    `.sec/keys`.
-5. **Private keys.** No `PRIVATE KEY` block (the existing detector).
-6. **Known values** (only when the keystore is available). No value of any
-   key occurs, in any form from 6.3 step 1, in text, or in the strings of a
-   binary file (8). The report names the key, file and line, never the
-   value.
+5. **Private keys** (`private_key`). No `PRIVATE KEY` block (the existing
+   detector; an allowlisted fp is respected).
+6. **Known values** (`known_value`; only when the keystore is available).
+   No value of any key occurs, in any form from 6.3 step 1, in text, or in
+   the strings of a binary file (8). The report names the key, file and
+   line, never the value.
 
-The first check that fails is reported with all its findings; the others
-still run.
+All checks run and all findings are reported, as TSV
+`commit file line col check message` or, with `-json`, JSON Lines. Errors in
+`.sec/config`, `names` and `manifest` themselves are findings too (check
+`config`, `names`, `manifest`). The content of files under `.sec/` is not
+checked for placeholders.
+
+Each commit is checked with the `.sec/config`, `names` and `manifest` of
+that commit, and the index with those of the index. A commit without `.sec/`
+gets the grammar, forbidden-path and private-key checks only.
 
 Without the keystore, check 6 is skipped with a single line saying so.
 
-`--staged` checks the index (the pre-commit case). `--range` checks every
-commit in the range (pre-push). `--all` checks every commit reachable from
-any ref; run it on the deploy machine from time to time, because commits
+`-staged` checks the index (the pre-commit case). `-range` takes
+`git rev-list` arguments (`A..B`, `B --not --remotes`) and checks every
+commit they list (pre-push). `-all` checks every commit reachable from any
+ref. In both, a problem that many commits share is reported once, with the
+oldest commit that has it. Run `-all` run it on the deploy machine from time to time, because commits
 made elsewhere skipped check 6.
 
 `--all` keeps its state in the keystore directory (`check.state`, mode 0600),
@@ -388,7 +402,9 @@ On the next run:
 - binary files are scanned via their strings when `binary = scan` (8).
 
 New flag for `hook`: `-warn`. It prints the findings in the added lines and
-exits 0. `hook_scan = warn` makes it the default inside `.sec/`.
+exits 0. Inside `.sec/`, when `-warn` is not given, `hook_scan` decides:
+`warn` (the default) prints and exits 0, `block` blocks as before, `off`
+does nothing. An explicit `-warn` or `-warn=false` wins.
 
 `train` with the keystore available first runs check 6 on its input. If any
 value is present it stops, so a value never becomes a dictionary word.
@@ -413,9 +429,16 @@ unified diff on stdin).
 manifest pull  -node <node> [path...]   record live attributes for files already in the tree   (sudo)
 manifest check -node <node> [path...]   compare manifest and live attributes
 manifest apply -node <node> [path...]   set live attributes from the manifest, content untouched   (sudo)
-manifest fix                            add entries for new files (taken from the working tree's
-                                        files, owner/group set to root:root), drop entries of deleted ones
+manifest fix                            add entries for new files, drop entries of deleted ones
 ```
+
+`manifest fix` gives a new file the owner and group of the nearest parent
+directory entry (type `d`) of the same node, and that directory's mode
+without execute, setuid, setgid and sticky bits (`0750` -> `0640`). A
+symlink gets `0777`. With no parent entry it uses `root:root 0600`. Every
+added entry is printed for review. Paths that match `forbid` are not added.
+A type `d` entry stays while its directory exists, and type `s` entries are
+never dropped.
 
 ## 7. Flows
 
@@ -476,12 +499,13 @@ A file with a NUL in its first 8000 bytes is binary.
 
 ```sh
 #!/bin/sh
-segscan check --staged || exit 1
-segscan hook -warn
+segscan check -staged || exit 1
+exec segscan hook          # warn, block or off: hook_scan
 ```
 
-`.sec/hooks/pre-push`: runs `segscan check --range` for every pushed ref,
-using the ranges git gives on stdin.
+`.sec/hooks/pre-push` runs `segscan check -range` for every pushed ref. The
+range is `remote..local`, or `local --not --remotes` for a new ref or a
+remote commit that is not here.
 
 Both expect `segscan` in `$PATH`. If it is missing they fail with a message
 rather than pass silently.
@@ -505,7 +529,7 @@ and tests intact.
    - `init`, `key add|rm|list`, `manifest fix` (a new file takes owner,
      group and mode from the nearest parent directory entry of the same
      node, or `root:root 0600` if there is none, and is listed for review);
-   - `check` checks 1-5, `hook -warn`;
+   - `check` checks 1-5, `hook -warn`, the pre-commit and pre-push hooks;
    - `.sec/` defaults for `scan`/`hook`/`train`.
 3. **Keystore and transforms:**
    - the keystore reader with mode checks, `key set|check`;
@@ -513,7 +537,7 @@ and tests intact.
    - `check` check 6, the `train` guard.
 4. **Attributes:** `manifest pull|check|apply`, `expand -install` with atomic
    writes and attributes, type `s`.
-5. **Rest:** `drift`, binary scanning (8), `keys sync`, pre-push hook.
+5. **Rest:** `drift`, binary scanning (8), `keys sync`.
 
 ## 12. Decisions
 

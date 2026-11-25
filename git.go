@@ -121,7 +121,7 @@ func hunkRange(b []byte) (start, n int) {
 var defaultExcludes = []string{
 	"go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
 	"composer.lock", "poetry.lock", "Gemfile.lock", "*.lock", "*.min.js", "*.min.css", "*.map",
-	".segscan-allow",
+	".segscan-allow", ".sec/allow",
 }
 
 type allowList struct {

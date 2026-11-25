@@ -29,6 +29,16 @@ const usage = `segscan - statistical secret scanner
   segscan calib [flags] file...         noise on files and recall on synthetic secrets
   segscan explain [flags] 'string'      show per-character cost and segmentation
 
+Configuration repositories (a .sec/ directory, see DESIGN.md):
+  segscan init                          create .sec/ and point core.hooksPath at .sec/hooks
+  segscan key add <name> [-scope GLOB,...]
+                                        add a key name, print its placeholder
+  segscan key rm <name> | key list      remove an unused key / list keys and their uses
+  segscan check [-staged|-range REVS|-all]
+                                        blocking checks: placeholders, names, manifest,
+                                        forbidden paths, private keys (default: working tree)
+  segscan manifest fix                  add manifest entries for new files, drop deleted ones
+
 Flags for scan/diff/hook/calib:
   -m file       model (default $SEGSCAN_MODEL, then .git/segscan.model)
   -tau N        randomness threshold, bits per char
@@ -36,7 +46,12 @@ Flags for scan/diff/hook/calib:
   -minlen N     minimum segment length
   -bpc N        report only findings with at least N average bits per char
   -kw N         threshold multiplier when password/token/key... precedes on the line (1 = off)
+  -skip-uuids   do not score !SECKEY_..! placeholders and canonical UUIDs
   -allow file   allowlist (fp fingerprints and path:glob lines)
+  -warn         (hook) print the findings but do not block the commit
+
+Inside a .sec/ repository the model defaults to .sec/segscan.model, the
+allowlist to .sec/allow, and -skip-uuids and the hook mode to .sec/config.
   -json         JSON Lines output (one object per finding) instead of TSV
   -preview N    how many chars of a finding to print (default 10)
   -show         print findings in full
@@ -52,7 +67,11 @@ type common struct {
 	json         bool
 	noHeader     bool
 	preview      int
+	skipUUIDs    bool
 	o            Opts
+
+	sec *secConfig // set by finish inside a .sec/ repository
+	set map[string]bool
 }
 
 func flags(name string) (*flag.FlagSet, *common) {
@@ -70,7 +89,36 @@ func flags(name string) (*flag.FlagSet, *common) {
 	fs.Float64Var(&c.o.MinExcess, "excess", c.o.MinExcess, "minimum accumulated excess, bits")
 	fs.IntVar(&c.o.MinLen, "minlen", c.o.MinLen, "minimum segment length")
 	fs.Float64Var(&c.o.KwFactor, "kw", c.o.KwFactor, "threshold multiplier after password/token/key words (1 = off)")
+	fs.BoolVar(&c.skipUUIDs, "skip-uuids", false, "do not score !SECKEY_..! placeholders and canonical UUIDs")
 	return fs, c
+}
+
+// finish applies the defaults of a .sec/ repository to the flags that were
+// not given. Call it after Parse.
+func (c *common) finish(fs *flag.FlagSet) {
+	c.set = map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { c.set[f.Name] = true })
+	if c.skipUUIDs {
+		c.o.Skip = skipAll
+	}
+	top := secRoot()
+	if top == "" {
+		return
+	}
+	cfg, err := loadSecConfig(top)
+	if err != nil {
+		die(err)
+	}
+	c.sec = cfg
+	if !c.set["allow"] {
+		c.allow = secPath(top, "allow")
+	}
+	if !c.set["m"] && os.Getenv("SEGSCAN_MODEL") == "" {
+		c.model = secPath(top, "segscan.model")
+	}
+	if !c.set["skip-uuids"] {
+		c.o.Skip = cfg.SkipUUIDs
+	}
 }
 
 func modelPath(v string) string {
@@ -112,6 +160,14 @@ func main() {
 		cmdCalib(args)
 	case "explain":
 		cmdExplain(args)
+	case "init":
+		cmdInit(args)
+	case "key":
+		cmdKey(args)
+	case "check":
+		cmdCheck(args)
+	case "manifest":
+		cmdManifest(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -181,8 +237,9 @@ func filesOrGit(paths []string) []string {
 
 // ---------- commands ----------
 
-func train(files []string, allow *allowList, top int, lists ...string) *Model {
+func train(files []string, allow *allowList, top, skip int, lists ...string) *Model {
 	t := newTrainer()
+	t.skip = skip
 	for _, l := range lists {
 		data, err := os.ReadFile(l)
 		if err != nil {
@@ -206,11 +263,12 @@ func cmdTrain(args []string) {
 	top := fs.Int("top", 0, "keep only the N most frequent corpus words in the dictionary")
 	words := fs.String("words", "", "comma-separated word lists (one word per line, a-z)")
 	fs.Parse(args)
+	c.finish(fs)
 	var lists []string
 	if *words != "" {
 		lists = strings.Split(*words, ",")
 	}
-	m := train(filesOrGit(fs.Args()), loadAllow(c.allow, !c.noDef), *top, lists...)
+	m := train(filesOrGit(fs.Args()), loadAllow(c.allow, !c.noDef), *top, c.o.Skip, lists...)
 	path := modelPath(c.model)
 	if err := m.save(path); err != nil {
 		die(err)
@@ -355,6 +413,7 @@ func (p *printer) print(f *Finding) {
 func cmdScan(args []string) {
 	fs, c := flags("scan")
 	fs.Parse(args)
+	c.finish(fs)
 	m := mustModel(c)
 	allow := loadAllow(c.allow, !c.noDef)
 	p := c.printer(false)
@@ -406,6 +465,7 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 	fs, c := flags("diff")
 	all := fs.Bool("all", false, "print every occurrence instead of unique findings")
 	fs.Parse(args)
+	c.finish(fs)
 	if runDiff(c, mustModel(c), r, !*all) > 0 {
 		os.Exit(1)
 	}
@@ -413,7 +473,18 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 
 func cmdHook(args []string) {
 	fs, c := flags("hook")
+	warn := fs.Bool("warn", false, "print the findings but do not block the commit")
 	fs.Parse(args)
+	c.finish(fs)
+	block := !*warn
+	if !c.set["warn"] && c.sec != nil {
+		switch c.sec.HookScan {
+		case "off":
+			return
+		case "warn":
+			block = false
+		}
+	}
 	path := modelPath(c.model)
 	m, err := loadModel(path)
 	if os.IsNotExist(err) {
@@ -422,7 +493,7 @@ func cmdHook(args []string) {
 		if gerr != nil {
 			die(gerr)
 		}
-		m = train(files, loadAllow(c.allow, !c.noDef), 0)
+		m = train(files, loadAllow(c.allow, !c.noDef), 0, c.o.Skip)
 		if err := m.save(path); err != nil {
 			die(err)
 		}
@@ -443,6 +514,11 @@ func cmdHook(args []string) {
 	n := runDiff(c, m, out, false)
 	if err := cmd.Wait(); err != nil {
 		die(err)
+	}
+	if n > 0 && !block {
+		fmt.Fprintf(os.Stderr, "\nsegscan: %d suspicious fragment(s), not blocking.\n"+
+			"False positive? Add its fp to the allowlist or put \"segscan:allow\" on the line.\n", n)
+		return
 	}
 	if n > 0 {
 		fmt.Fprintf(os.Stderr, "\nsegscan: %d suspicious fragment(s), commit blocked.\n"+
@@ -478,6 +554,7 @@ func cmdCalib(args []string) {
 	fs, c := flags("calib")
 	n := fs.Int("n", 300, "synthetic strings per cell")
 	fs.Parse(args)
+	c.finish(fs)
 	m := mustModel(c)
 	sc := NewScanner(m, c.o)
 
@@ -556,6 +633,7 @@ func cmdCalib(args []string) {
 func cmdExplain(args []string) {
 	fs, c := flags("explain")
 	fs.Parse(args)
+	c.finish(fs)
 	sc := NewScanner(mustModel(c), c.o)
 	for _, line := range fs.Args() {
 		sc.explain = func(piece []byte, bits float32, word bool) {
