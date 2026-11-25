@@ -100,7 +100,9 @@ another machine over ssh with the modes kept.
 
 ## 4. File formats
 
-All files are UTF-8 text with LF line ends. `#` at the start of a line begins
+All files are UTF-8 text with LF line ends, with one exception: the value
+field of the keystore's `keys` and `retired` is any bytes except LF (4.3);
+their names, uuids and dates are UTF-8 like everything else. `#` at the start of a line begins
 a comment and blank lines are ignored, except in `keys` (see 4.3). Fields are
 separated by one TAB. In `.sec/config` only, a `#` after a space or TAB also
 starts a comment, so a value cannot contain ` #`.
@@ -383,7 +385,17 @@ Needs the keystore.
 - `-to <dir>`: writes the files under `dir` mode 0600, directories 0700.
   `dir` must be outside the repository. This is for review and for deploy
   tools that copy files themselves.
-- `-install <root>` (usually `/`, under sudo) first handles the type `d`
+- `-install <root>` (usually `/`, under sudo) never writes through a symlink
+  it was not told about. Every existing component below `<root>` on the way
+  to a target must be a plain directory, or a symlink that the manifest of
+  the node declares as type `l` and whose resolved target is still under
+  `<root>`. Anything else is an error before the first write, so a staging
+  root with `etc -> /etc` cannot overwrite the live host. The final write is
+  done with `O_NOFOLLOW`, relative to a directory opened along the checked
+  path, so a symlink swapped in during the run is not followed either. Type
+  `l` entries are created as symlinks, never written through.
+
+  It first handles the type `d`
   entries, parents before children. A missing directory is created with the
   mode, owner, group and other attributes of its entry, and an existing one
   gets them applied. A directory with no entry that has to be created gets
@@ -434,9 +446,14 @@ given in brackets:
    `files/` is in the repository, under any path:
    - a file whose content equals a secret file is a finding;
    - so is a file that contains a line of one. Every line of a secret file
-     whose text, trimmed of spaces, is at least 8 bytes counts, plus the
-     value part of a `name=value` line of the same length. Shorter lines are
-     too common (`}`, `[main]`) to tell anything.
+     whose text, trimmed of spaces, is at least 8 bytes counts. Shorter lines
+     are too common (`}`, `[main]`) to tell anything;
+   - so is a file that contains the value part of a `name=value` line. When
+     the name looks like a credential (it contains `pass`, `pwd`, `secret`,
+     `token`, `key`, `auth` or `cred`, the scanner's keyword list), the
+     value counts at any length, like a keystore value, so `TOKEN=abc123`
+     is found under another name. Other values count from 8 bytes, because
+     `PORT=8080` or `DEBUG=true` would match everywhere.
 
    The report names the key or secret file, the file and the line, never
    the value.
@@ -606,13 +623,13 @@ exec segscan hook          # warn, block or off: hook_scan
 
 `.sec/hooks/pre-push` runs `segscan check -range` for every pushed ref.
 `-range` takes one string that is split at whitespace into `git rev-list`
-arguments, so `-range "A --not --remotes=origin"` works. The
-range is `remote..local`, or `local --not --remotes=<remote>` for a new ref
-or a remote commit that is not here. Only the refs of the remote being
-pushed to are excluded: a commit fetched from another remote was never
-checked for this one. When the push goes to a URL with no remote name,
-nothing is excluded and the whole ancestry is checked. A deleted ref (an all-zero local id) has
-nothing to check and is skipped.
+arguments, so `-range "A ^B ^C"` works. The range is the pushed commit minus
+the tips the destination advertises right now (`git ls-remote`), for those
+tips that exist here. Local remote-tracking refs are not trusted: they can
+be stale after a branch was deleted or rewritten on the server, or belong to
+another remote. When `ls-remote` fails, nothing is excluded and the whole
+ancestry is checked. A deleted ref (an all-zero local id) has nothing to
+check and is skipped.
 
 Both expect `segscan` in `$PATH`. If it is missing they fail with a message
 rather than pass silently.
