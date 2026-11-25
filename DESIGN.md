@@ -102,7 +102,8 @@ another machine over ssh with the modes kept.
 
 All files are UTF-8 text with LF line ends. `#` at the start of a line begins
 a comment and blank lines are ignored, except in `keys` (see 4.3). Fields are
-separated by one TAB.
+separated by one TAB. In `.sec/config` only, a `#` after a space or TAB also
+starts a comment, so a value cannot contain ` #`.
 
 ### 4.1 `.sec/config`
 
@@ -309,11 +310,24 @@ sudo segscan import [-n] -node <node> <abs-path>...
 ```
 
 Copies `/<abs-path>` from the running system into `nodes/<node>/<abs-path>`
-and rewrites it (needs the keystore):
+and rewrites it (needs the keystore).
+
+The destination must stay inside the repository. Every existing component of
+`nodes/<node>/<abs-path>` below the repository top, the file itself included,
+must be a plain directory or a plain file, never a symlink. Before writing,
+the resolved destination is checked to be under the repository top. A
+symlink there is an error, because under sudo it could point back into the
+live system and the write would replace a real configuration with
+placeholders. Files are written with `O_NOFOLLOW`. A symlink that is part of
+the configuration is recorded as type `l` and recreated, not followed.
+
+The steps:
 
 1. For every key, it builds the set of forms to search for: the value under
    no transform, under each single transform in 5.2, and under every
-   transform chain already used for that key in the repository. A
+   transform chain used for that key in the tree being imported into and,
+   for check 6, in any commit that the check covers (a chain that was used
+   once and later removed still has to be found in the history). A
    transform that cannot represent the value (5.2) gives no form and is
    left out of the set, here and in check 6; it is an error only where a
    placeholder asks for it (`expand`, the round trip). Forms are searched
