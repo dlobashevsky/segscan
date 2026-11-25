@@ -199,6 +199,10 @@ func TestManifest(t *testing.T) {
 		t.Errorf("format: %q", got)
 	}
 	for _, bad := range []string{
+		"nodes/n1/../../etc/shadow\ts\t0600\troot\troot\tsecret=shadow",
+		"nodes/n1/./etc\td\t0755\troot\troot",
+		"nodes/n1//etc\td\t0755\troot\troot",
+		"nodes/n1/etc/\td\t0755\troot\troot",
 		"a\ts\t0600\troot\troot\tsecret=..",
 		"a\ts\t0600\troot\troot\tsecret=../../etc/shadow",
 		"a\ts\t0600\troot\troot\tsecret=.env",
