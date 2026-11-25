@@ -170,13 +170,21 @@ it as "retired value of <name>". A retired value leaves the file only with
 `key forget <name>`, which refuses while `check --all` has not run since the
 value was retired.
 
+Secret files are kept the same way. When `import -secret <name>` replaces
+`files/<name>`, the old content moves to `retired-files/<name>.<date>`
+(mode 0600). Check 6 searches it like a current secret file, and
+`key forget <name>` drops it under the same condition.
+
 ### 4.4 `.sec/manifest`
 
 ```
 <path> TAB <type> TAB <mode> TAB <owner> TAB <group> [TAB <attr>...]
 ```
 
-- `path`: repository path (`nodes/n1/etc/nginx/nginx.conf`). The target path
+- `path`: repository path (`nodes/n1/etc/nginx/nginx.conf`), normalized:
+  relative, no empty, `.` or `..` component, no trailing `/`. Anything else,
+  such as `nodes/n1/../../etc/shadow`, is a manifest error, also for type
+  `s` and `d` entries that have no file in the tree. The target path
   is the path minus the node root, with no other mapping. Files of containers
   on a node are kept under the host path where they live
   (`nodes/n1/srv/app/conf/...`), like any other file of the node.
@@ -320,16 +328,29 @@ must be a plain directory or a plain file, never a symlink. Before writing,
 the resolved destination is checked to be under the repository top. A
 symlink there is an error, because under sudo it could point back into the
 live system and the write would replace a real configuration with
-placeholders. Files are written with `O_NOFOLLOW`. A symlink that is part of
-the configuration is recorded as type `l` and recreated, not followed.
+placeholders. A symlink that is part of the configuration is recorded as type
+`l` and recreated, not followed.
+
+The check and the write must be the same walk, or a directory renamed and
+replaced by a symlink between them would still be followed. So the
+destination is opened component by component from a descriptor of the
+repository top. On Linux 5.6 and later this is `openat2` with
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`. Elsewhere every directory is opened
+with `openat(O_DIRECTORY | O_NOFOLLOW)` relative to the previous one, and the
+file with `O_NOFOLLOW` relative to the last. Directories that have to be
+created are made with `mkdirat` on the same descriptors. `expand -install`
+walks `<root>` the same way (6.4).
 
 The steps:
 
 1. For every key, it builds the set of forms to search for: the value under
    no transform, under each single transform in 5.2, and under every
    transform chain used for that key in the tree being imported into and,
-   for check 6, in any commit that the check covers (a chain that was used
-   once and later removed still has to be found in the history). A
+   for check 6, in any of: the commits the check covers, `HEAD`, the
+   commits a range excludes (its base), and the chains recorded in
+   `check.state`. The state keeps every chain it has seen, so a chain
+   removed in the very commit being checked (the staged change, or the
+   first commit of a range) is still searched. A
    transform that cannot represent the value (5.2) gives no form and is
    left out of the set, here and in check 6; it is an error only where a
    placeholder asks for it (`expand`, the round trip). Forms are searched
@@ -390,10 +411,14 @@ Needs the keystore.
   to a target must be a plain directory, or a symlink that the manifest of
   the node declares as type `l` and whose resolved target is still under
   `<root>`. Anything else is an error before the first write, so a staging
-  root with `etc -> /etc` cannot overwrite the live host. The final write is
-  done with `O_NOFOLLOW`, relative to a directory opened along the checked
-  path, so a symlink swapped in during the run is not followed either. Type
-  `l` entries are created as symlinks, never written through.
+  root with `etc -> /etc` cannot overwrite the live host. The check and the
+  write are the same walk over directory descriptors, as for `import`
+  (6.3): with `openat2(RESOLVE_BENEATH)`, a declared symlink is resolved by
+  hand and checked to stay under `<root>`. A symlink swapped in during the
+  run is therefore not followed either. The final target of every entry,
+  type `s` and `d` included, must be under `<root>` once resolved, whatever
+  the manifest says. Type `l` entries are created as symlinks, never written
+  through.
 
   It first handles the type `d`
   entries, parents before children. A missing directory is created with the
@@ -453,7 +478,8 @@ given in brackets:
      `token`, `key`, `auth` or `cred`, the scanner's keyword list), the
      value counts at any length, like a keystore value, so `TOKEN=abc123`
      is found under another name. Other values count from 8 bytes, because
-     `PORT=8080` or `DEBUG=true` would match everywhere.
+     `PORT=8080` or `DEBUG=true` would match everywhere. An empty value
+     (`TOKEN=`) is never searched.
 
    The report names the key or secret file, the file and the line, never
    the value.
