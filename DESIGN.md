@@ -81,6 +81,7 @@ input (see 6.6).
 ```
 ~/.secshell/<project>/     path from .sec/config, overridden by $SEGSCAN_KEYSTORE
   keys                     name, uuid, value; mode 0600
+  retired                  values replaced by key set, kept for check 6; mode 0600
   files/<name>             secrets that are whole files: .htpasswd, PEM keys, .env; mode 0600
 ```
 
@@ -156,6 +157,15 @@ start with `#` in the first column. There are no requirements on the length
 or strength of a value, because values are often set by other tools or other
 teams. Weak values are reported by `key check -weak`, using the scanner's
 cost model.
+
+`retired` has the same format plus a fourth field, the date it was retired.
+`key set` does not drop the value it replaces: it appends it to `retired`.
+An old value can still be live (the rotation is not deployed yet) and can
+still sit in commits made elsewhere that no `check --all` has seen. Check 6
+searches every form of every retired value like a current one, and reports
+it as "retired value of <name>". A retired value leaves the file only with
+`key forget <name>`, which refuses while `check --all` has not run since the
+value was retired.
 
 ### 4.4 `.sec/manifest`
 
@@ -236,7 +246,10 @@ A transform must produce text that is valid in its context for every value
 the keystore allows (any byte except LF). When it cannot, for example
 `nginxq` with a control byte other than TAB and CR, or `xml` with a byte that
 XML 1.0 forbids, `expand` fails and names the key. It never writes the raw
-byte.
+byte. `dq` and `xml` also need the value to be valid UTF-8, because JSON,
+TOML, YAML and XML text is UTF-8; any other value is an error for them.
+`nginxq`, `sq`, `urlenc` and the `b64` family pass bytes of 0x80 and above
+through (urlenc as `%XX`), because their contexts are bytes.
 
 New transforms can be added later; an unknown one is an error.
 
@@ -277,6 +290,7 @@ key add <name> [-scope GLOB,...] [-base58]
 key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen: N chars of base58
                                     from crypto/rand (the house standard for our own keys)   (keystore)
 key rm  <name>                      from names; refuses while a placeholder still uses it
+key forget <name>                   drop the retired values of a key (4.3)   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
                                     -weak: values the cost model finds guessable   (keystore)
@@ -391,8 +405,9 @@ Blocking checks (exit 1):
    type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
    Owner and group must not be empty. Whether they exist on the node is
    checked on install (4.4).
-4. **Forbidden paths.** No staged path matches `forbid`, the keystore path or
-   `.sec/keys`.
+4. **Forbidden paths.** No path in the checked snapshot (working tree,
+   index, or each commit of the range or history) matches `forbid`, the
+   keystore path or `.sec/keys`.
 5. **Private keys.** No `PRIVATE KEY` block (the existing detector).
 6. **Known values** (only when the keystore is available). No value of any
    key occurs, in any form from 6.3 step 1, in a text file or anywhere in the
@@ -506,10 +521,12 @@ manifest fix                            add entries for new files (taken from th
 ### 7.4 Rotation
 
 1. `segscan key set <name>`. Name and uuid stay, so no file in the repository
-   changes.
+   changes. The old value goes to `retired` (4.3).
 2. `segscan expand -install` on every node that uses the key
    (`key list` shows them).
 3. Restart the services. segscan does not do it.
+4. `segscan check --all`, then `segscan key forget <name>` when the old
+   value is dead on every node.
 
 ## 8. Binary files
 
