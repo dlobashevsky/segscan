@@ -207,13 +207,20 @@ idempotent and `drift` (7.4) shows only real changes.
 | `b64nl` | base64 of value + LF | what `echo value \| base64` produces |
 | `b64url` | base64url, unpadded | tokens in URLs |
 | `urlenc` | percent-encoding, RFC 3986 unreserved kept, upper-case hex | query strings, nginx proxying to play |
-| `dq` | `\` and `"` escaped with `\` | inside "..." (nginx, TOML, JSON, YAML) |
+| `dq` | JSON string escaping: `\\`, `\"`, `\t`, `\r`, `\n`, other bytes below 0x20 and 0x7f as `\u00XX` | inside "..." in JSON, TOML basic strings, YAML double-quoted |
+| `nginxq` | `\\`, `\"`, `\t`, `\r`, `\n`; any other control byte is an error | inside "..." in nginx |
 | `sq` | `'` replaced with `'\''` | inside '...' in sh |
 | `xml` | `& < > " '` as entities | XML text and attributes |
 
 Example: `Basic !SECKEY_ch_sts_<uuid>:b64!`. Salted hashes (bcrypt, apr1,
 crypt) cannot be transforms, because each run would produce new text. Files
 that hold them (`.htpasswd`) are secret files (type `s`).
+
+A transform must produce text that is valid in its context for every value
+the keystore allows (any byte except LF). When it cannot, for example
+`nginxq` with a control byte other than TAB and CR, or `xml` with a byte that
+XML 1.0 forbids, `expand` fails and names the key. It never writes the raw
+byte.
 
 New transforms can be added later; an unknown one is an error.
 
@@ -349,9 +356,17 @@ Blocking checks (exit 1):
    `.sec/keys`.
 5. **Private keys.** No `PRIVATE KEY` block (the existing detector).
 6. **Known values** (only when the keystore is available). No value of any
-   key occurs, in any form from 6.3 step 1, in text, or in the strings of a
-   binary file (8). The report names the key, file and line, never the
-   value.
+   key occurs, in any form from 6.3 step 1, in a text file or anywhere in the
+   bytes of a binary file (8). No secret file from `files/` is in the
+   repository, under any path:
+   - a file whose content equals a secret file is a finding;
+   - so is a file that contains a line of one. Every line of a secret file
+     whose text, trimmed of spaces, is at least 8 bytes counts, plus the
+     value part of a `name=value` line of the same length. Shorter lines are
+     too common (`}`, `[main]`) to tell anything.
+
+   The report names the key or secret file, the file and the line, never
+   the value.
 
 The first check that fails is reported with all its findings; the others
 still run.
@@ -465,7 +480,13 @@ A file with a NUL in its first 8000 bytes is binary.
     64 MiB unpacked and two levels deep.
 
   The statistical scanner reports findings in the strings with the byte
-  offset in the `col` field; check 6 looks for every form of every value.
+  offset in the `col` field. The length limits apply to it only.
+
+  Check 6 does not use the strings. It searches the raw bytes, and the
+  unpacked bytes, for every form of every value: as is, and in UTF-16LE.
+  Values of any length are searched, so a short one is not lost between two
+  NUL bytes.
+
   Unpacking that fails, or that hits a limit, is reported as a warning, not
   as clean.
 - Binary files never get placeholders and are never rewritten.
