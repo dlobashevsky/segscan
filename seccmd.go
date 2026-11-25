@@ -124,7 +124,7 @@ func keyUses(top string) map[string]map[string]int {
 		die(err)
 	}
 	uses := map[string]map[string]int{}
-	ck := &checker{top: top, allow: loadAllow("", false), cache: map[string]*fileInfo{}}
+	ck := &checker{top: top, cache: map[string]*fileInfo{}}
 	for _, f := range s.Files {
 		if f.Link || strings.HasPrefix(f.Path, secDir+"/") {
 			continue

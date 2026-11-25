@@ -398,11 +398,12 @@ given in brackets:
 All checks run and all findings are reported, as TSV
 `commit file line col check message` or, with `-json`, JSON Lines. Errors in
 `.sec/config`, `names` and `manifest` themselves are findings too (check
-`config`, `names`, `manifest`). The content of files under `.sec/` is not
-checked for placeholders.
+`config`, `names`, `manifest`). Files under `.sec/` are checked for private
+keys only, not for placeholders.
 
-Each commit is checked with the `.sec/config`, `names` and `manifest` of
-that commit, and the index with those of the index. A commit without `.sec/`
+Each commit is checked with the `.sec/config`, `names`, `manifest` and
+`allow` of that commit, and the index with those of the index, so an
+unstaged allowlist entry cannot hide a staged key. A commit without `.sec/`
 gets the grammar, forbidden-path and private-key checks only.
 
 Without the keystore, check 6 is skipped with a single line saying so.

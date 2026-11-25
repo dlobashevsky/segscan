@@ -215,6 +215,27 @@ func TestCLIConfigRepository(t *testing.T) {
 		t.Errorf("check -range of the first commit: exit %d\n%s", code, out)
 	}
 
+	// A private key under .sec/ is found too; the allowlist is the one of
+	// the checked snapshot, so an unstaged fingerprint does not hide it.
+	pem := "-----BEGIN OPENSSH PRIVATE KEY-----"
+	r.write(".sec/leak.pem", pem+"\nb3Bl\n-----END OPENSSH PRIVATE KEY-----\n")
+	r.must("git", "add", ".sec/leak.pem")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, ".sec/leak.pem\t1\t1\tprivate_key") {
+		t.Errorf("private key under .sec/: exit %d\n%s", code, out)
+	}
+	fp := (&Finding{Text: pem}).FP()
+	allowBefore := r.read(".sec/allow")
+	r.write(".sec/allow", allowBefore+fp+"\n")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "private_key") {
+		t.Errorf("an unstaged allowlist entry hid a staged key: exit %d\n%s", code, out)
+	}
+	if out, _, _ := r.run("segscan", "check"); strings.Contains(out, ".sec/leak.pem") {
+		t.Errorf("the working tree allowlists the key, but it was reported:\n%s", out)
+	}
+	r.write(".sec/allow", allowBefore)
+	r.must("git", "rm", "-q", "--cached", ".sec/leak.pem")
+	r.must("rm", ".sec/leak.pem")
+
 	// A broken .sec/config in the working tree does not stop checking the
 	// history; it is only a finding of the working tree.
 	cfg := r.read(".sec/config")

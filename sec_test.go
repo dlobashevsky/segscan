@@ -216,7 +216,7 @@ func TestManifest(t *testing.T) {
 
 func TestPrivateKeyAfterUnterminatedBlock(t *testing.T) {
 	data := "-----BEGIN CERTIFICATE-----\nMIIB\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n"
-	fi := analyzeFile([]byte(data), loadAllow("", false))
+	fi := analyzeFile([]byte(data))
 	if len(fi.finds) != 1 || fi.finds[0].Check != ckPrivate || fi.finds[0].Line != 3 {
 		t.Errorf("finds: %+v", fi.finds)
 	}

@@ -213,6 +213,8 @@ type checkFinding struct {
 	Col    int    `json:"col"`
 	Check  string `json:"check"`
 	Msg    string `json:"message"`
+
+	fp string // allowlist fingerprint of a private key line
 }
 
 // ---------- per-file analysis (cached by blob id) ----------
@@ -235,7 +237,9 @@ func isBinary(data []byte) bool {
 	return bytes.IndexByte(head, 0) >= 0
 }
 
-func analyzeFile(data []byte, allow *allowList) *fileInfo {
+// analyzeFile does not depend on the allowlist, so its result can be cached
+// by blob id across snapshots with different allowlists.
+func analyzeFile(data []byte) *fileInfo {
 	fi := &fileInfo{}
 	if isBinary(data) {
 		if i := bytes.Index(data, phPrefix); i >= 0 {
@@ -256,9 +260,7 @@ func analyzeFile(data []byte, allow *allowList) *fileInfo {
 		line = bytes.TrimRight(line, "\r")
 		if _, private := pem.feed(line); private {
 			f := Finding{Text: string(line)}
-			if !allow.fp[f.FP()] {
-				fi.finds = append(fi.finds, checkFinding{Line: no, Col: 1, Check: ckPrivate, Msg: pemLabel(line)})
-			}
+			fi.finds = append(fi.finds, checkFinding{Line: no, Col: 1, Check: ckPrivate, Msg: pemLabel(line), fp: f.FP()})
 		}
 		if !bytes.Contains(line, phPrefix) {
 			continue
@@ -283,7 +285,6 @@ func analyzeFile(data []byte, allow *allowList) *fileInfo {
 
 type checker struct {
 	top   string
-	allow *allowList
 	cache map[string]*fileInfo
 }
 
@@ -297,7 +298,7 @@ func (ck *checker) info(s *snapshot, f snapFile) *fileInfo {
 	if err != nil {
 		die(err)
 	}
-	fi := analyzeFile(data, ck.allow)
+	fi := analyzeFile(data)
 	if f.OID != "" {
 		ck.cache[f.OID] = fi
 	}
@@ -335,6 +336,10 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	for _, e := range entries {
 		man[e.Path] = e
 	}
+	// The allowlist of this snapshot, not of the working tree: an unstaged
+	// fingerprint must not hide a staged key.
+	allow := &allowList{fp: map[string]bool{}}
+	allow.add(s.file(secDir + "/allow"))
 
 	// Paths that may never be in the repository.
 	forbidPrefix := []string{secDir + "/keys"}
@@ -373,13 +378,22 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 				}
 			}
 		}
-		if inSec || f.Link {
+		if f.Link {
 			continue
 		}
 		fi := ck.info(s, f)
 		for _, x := range fi.finds {
+			if x.Check == ckPrivate && allow.fp[x.fp] {
+				continue
+			}
+			if inSec && x.Check != ckPrivate {
+				continue // .sec/ files are checked for private keys only
+			}
 			x.Commit, x.File = s.Commit, f.Path
 			out = append(out, x)
+		}
+		if inSec {
+			continue
 		}
 		for _, p := range fi.phs {
 			if !hasSec {
@@ -438,7 +452,7 @@ func cmdCheck(args []string) {
 	if top == "" {
 		die(fmt.Errorf("no %s/ in this repository: run segscan init", secDir))
 	}
-	ck := &checker{top: top, allow: loadAllow(secPath(top, "allow"), false), cache: map[string]*fileInfo{}}
+	ck := &checker{top: top, cache: map[string]*fileInfo{}}
 	var finds []checkFinding
 	switch {
 	case *staged || *rng != "" || *all:
