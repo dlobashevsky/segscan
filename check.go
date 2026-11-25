@@ -324,6 +324,13 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 		}
 	}
 
+	// A symlink or submodule in place of a .sec/ file would read as missing
+	// and fall back to defaults, dropping the repository's own forbid list.
+	for _, p := range []string{cfgPath, namesPath, manPath, secDir + "/allow"} {
+		if f := s.byPath[p]; f != nil && (f.Link || f.Gitlink) {
+			add(p, 0, 0, ckConfig, "must be a regular file")
+		}
+	}
 	cfg, err := parseSecConfig(s.file(cfgPath), filepath.Base(ck.top))
 	if err != nil {
 		add(cfgPath, 0, 0, ckConfig, "%v", err)
@@ -352,7 +359,11 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	if !filepath.IsAbs(ks) {
 		ks = filepath.Join(ck.top, ks)
 	}
-	if rel, err := filepath.Rel(ck.top, ks); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
+	rel, relErr := filepath.Rel(ck.top, ks)
+	if relErr == nil && rel == "." {
+		add(cfgPath, 0, 0, ckConfig, "the keystore cannot be the repository itself")
+	}
+	if relErr == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
 		forbidPrefix = append(forbidPrefix, filepath.ToSlash(rel))
 	}
 

@@ -479,8 +479,15 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 // fromIndex makes the hook follow the staged .sec/ files, not the working
 // tree: an unstaged edit of .sec/config (hook_scan = off), .sec/allow or the
 // model must not weaken the check of what is being committed. Flags given on
-// the command line still win. It returns the staged model, if there is one.
-func (c *common) fromIndex() *Model {
+// the command line still win. It returns the staged model (nil: none is
+// staged) and whether the hook must use it instead of any file on disk.
+func (c *common) fromIndex() (*Model, bool) {
+	for _, p := range []string{"config", "allow", "segscan.model"} {
+		out, _ := exec.Command("git", "-C", c.top, "ls-files", "-s", "--", secDir+"/"+p).Output()
+		if f := strings.Fields(string(out)); len(f) > 0 && f[0] != "100644" && f[0] != "100755" {
+			die(fmt.Errorf("staged %s/%s is not a regular file", secDir, p))
+		}
+	}
 	show := func(p string) ([]byte, bool) {
 		out, err := exec.Command("git", "-C", c.top, "show", ":"+secDir+"/"+p).Output()
 		return out, err == nil
@@ -502,16 +509,17 @@ func (c *common) fromIndex() *Model {
 		c.allowList = a
 	}
 	if c.set["m"] || os.Getenv("SEGSCAN_MODEL") != "" {
-		return nil
+		return nil, false
 	}
 	if data, ok := show("segscan.model"); ok {
 		m, err := decodeModel(bytes.NewReader(data), "staged "+secDir+"/segscan.model")
 		if err != nil {
 			die(err)
 		}
-		return m
+		return m, true
 	}
-	return nil
+	// No staged model: the built-in one only, never the working-tree file.
+	return nil, true
 }
 
 func cmdHook(args []string) {
@@ -520,8 +528,9 @@ func cmdHook(args []string) {
 	fs.Parse(args)
 	c.finish(fs)
 	var staged *Model
+	indexOnly := false
 	if c.sec != nil {
-		staged = c.fromIndex()
+		staged, indexOnly = c.fromIndex()
 	}
 	block := !*warn
 	if !c.set["warn"] && c.sec != nil {
@@ -533,9 +542,12 @@ func cmdHook(args []string) {
 		}
 	}
 	path := modelPath(c.model)
-	m, err := loadModel(path)
-	if staged != nil {
-		m, err = staged, nil
+	var m *Model
+	var err error
+	if indexOnly {
+		m = staged
+	} else {
+		m, err = loadModel(path)
 	}
 	if os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "segscan: no model, training on git ls-files -> %s\n", path)

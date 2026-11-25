@@ -354,6 +354,39 @@ func TestCLIWithoutSec(t *testing.T) {
 	}
 }
 
+func TestCLISecFilesAndKeystore(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	// A symlink in place of .sec/config must not silently bring back the
+	// defaults (and drop forbid = forbidden.txt).
+	r.write("real.conf", "forbid = forbidden.txt\n")
+	r.must("rm", ".sec/config")
+	r.must("ln", "-s", "../real.conf", ".sec/config")
+	r.write("forbidden.txt", "x\n")
+	r.must("git", "add", "-A")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, ".sec/config\t0\t0\tconfig\tmust be a regular file") {
+		t.Errorf("symlinked .sec/config: exit %d\n%s", code, out)
+	}
+	if _, errs, code := r.run("segscan", "hook"); code != 2 || !strings.Contains(errs, "not a regular file") {
+		t.Errorf("hook with a symlinked .sec/config: exit %d\n%s", code, errs)
+	}
+	r.must("rm", ".sec/config")
+	// The keystore cannot be the repository itself.
+	r.write(".sec/config", "keystore = .\n")
+	r.must("git", "add", "-A")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "the keystore cannot be the repository itself") {
+		t.Errorf("keystore = .: exit %d\n%s", code, out)
+	}
+	// The hook never reads an unstaged model: a broken one in the working
+	// tree is ignored when none is staged.
+	r.write(".sec/config", "")
+	r.write(".sec/segscan.model", "not a model")
+	r.must("git", "add", ".sec/config")
+	if _, errs, code := r.run("segscan", "hook"); code != 0 {
+		t.Errorf("hook read the unstaged model: exit %d\n%s", code, errs)
+	}
+}
+
 func TestCLIHistoryBeforeSec(t *testing.T) {
 	r := newRepo(t)
 	// A placeholder committed before .sec/ existed: only grammar, forbidden
