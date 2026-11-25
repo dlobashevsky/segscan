@@ -70,10 +70,11 @@ type common struct {
 	skipUUIDs    bool
 	o            Opts
 
-	sec       *secConfig // set by finish inside a .sec/ repository
-	top       string     // the repository top, with sec
-	set       map[string]bool
-	allowList *allowList // if set, runDiff uses it instead of loading c.allow
+	sec        *secConfig // set by finish inside a .sec/ repository
+	fromStaged bool       // the hook: .sec/ settings come from the index, see fromIndex
+	top        string     // the repository top, with sec
+	set        map[string]bool
+	allowList  *allowList // if set, runDiff uses it instead of loading c.allow
 }
 
 func flags(name string) (*flag.FlagSet, *common) {
@@ -108,8 +109,13 @@ func (c *common) finish(fs *flag.FlagSet) {
 		return
 	}
 	cfg, err := loadSecConfig(top)
-	if err != nil {
+	if err != nil && !c.fromStaged {
 		die(err)
+	}
+	if err != nil {
+		// The hook takes its policy from the index; an unstaged broken
+		// config must not stop it (fromIndex sets the real one).
+		cfg, _ = parseSecConfig(nil, filepath.Base(top))
 	}
 	c.sec, c.top = cfg, top
 	if !c.set["allow"] {
@@ -483,9 +489,16 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 // staged) and whether the hook must use it instead of any file on disk.
 func (c *common) fromIndex() (*Model, bool) {
 	for _, p := range []string{"config", "allow", "segscan.model"} {
-		out, _ := exec.Command("git", "-C", c.top, "ls-files", "-s", "--", secDir+"/"+p).Output()
-		if f := strings.Fields(string(out)); len(f) > 0 && f[0] != "100644" && f[0] != "100755" {
-			die(fmt.Errorf("staged %s/%s is not a regular file", secDir, p))
+		out, _ := exec.Command("git", "-C", c.top, "ls-files", "-s", "-z", "--", secDir+"/"+p).Output()
+		for _, rec := range strings.Split(string(out), "\x00") {
+			meta, path, ok := strings.Cut(rec, "\t")
+			if !ok {
+				continue
+			}
+			// A path below it means a directory in its place.
+			if f := strings.Fields(meta); path != secDir+"/"+p || len(f) == 0 || f[0] != "100644" && f[0] != "100755" {
+				die(fmt.Errorf("staged %s/%s is not a regular file", secDir, p))
+			}
 		}
 	}
 	show := func(p string) ([]byte, bool) {
@@ -526,6 +539,7 @@ func cmdHook(args []string) {
 	fs, c := flags("hook")
 	warn := fs.Bool("warn", false, "print the findings but do not block the commit")
 	fs.Parse(args)
+	c.fromStaged = true
 	c.finish(fs)
 	var staged *Model
 	indexOnly := false

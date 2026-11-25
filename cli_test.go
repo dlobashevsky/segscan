@@ -371,6 +371,18 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 		t.Errorf("hook with a symlinked .sec/config: exit %d\n%s", code, errs)
 	}
 	r.must("rm", ".sec/config")
+	// Nor may a directory take its place: git then lists only .sec/config/x.
+	r.must("git", "rm", "-q", "--cached", ".sec/config")
+	r.write(".sec/config/x", "forbid = \n")
+	r.must("git", "add", "-A")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, ".sec/config\t0\t0\tconfig\tmust be a regular file, not a directory") {
+		t.Errorf(".sec/config as a directory: exit %d\n%s", code, out)
+	}
+	if _, errs, code := r.run("segscan", "hook"); code != 2 || !strings.Contains(errs, "not a regular file") {
+		t.Errorf("hook with .sec/config as a directory: exit %d\n%s", code, errs)
+	}
+	r.must("git", "rm", "-q", "-r", "--cached", ".sec/config")
+	r.must("rm", "-r", ".sec/config")
 	// The keystore cannot be the repository itself.
 	r.write(".sec/config", "keystore = .\n")
 	r.must("git", "add", "-A")
@@ -384,6 +396,11 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 	r.must("git", "add", ".sec/config")
 	if _, errs, code := r.run("segscan", "hook"); code != 0 {
 		t.Errorf("hook read the unstaged model: exit %d\n%s", code, errs)
+	}
+	// Nor an unstaged broken config: the staged one is valid.
+	r.write(".sec/config", "colour = red\n")
+	if _, errs, code := r.run("segscan", "hook"); code != 0 {
+		t.Errorf("hook parsed the unstaged config: exit %d\n%s", code, errs)
 	}
 }
 

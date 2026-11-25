@@ -329,6 +329,14 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	for _, p := range []string{cfgPath, namesPath, manPath, secDir + "/allow"} {
 		if f := s.byPath[p]; f != nil && (f.Link || f.Gitlink) {
 			add(p, 0, 0, ckConfig, "must be a regular file")
+			continue
+		}
+		// A directory in its place: git lists only what is below it.
+		for _, f := range s.Files {
+			if strings.HasPrefix(f.Path, p+"/") {
+				add(p, 0, 0, ckConfig, "must be a regular file, not a directory")
+				break
+			}
 		}
 	}
 	cfg, err := parseSecConfig(s.file(cfgPath), filepath.Base(ck.top))
