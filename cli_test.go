@@ -248,12 +248,25 @@ func TestCLIConfigRepository(t *testing.T) {
 	}
 	r.write(".sec/config", cfg)
 
-	// The pre-push hook blocks the push of the bad commits.
+	// The pre-push hook blocks the push of the bad commits, also when another
+	// remote already has them: only the refs of the target remote count.
+	otherRemote := t.TempDir()
+	r.must("git", "init", "-q", "--bare", otherRemote)
+	r.must("git", "remote", "add", "other", otherRemote)
+	r.must("git", "push", "-q", "--no-verify", "other", "main")
+	r.must("git", "fetch", "-q", "other")
 	remote := t.TempDir()
 	r.must("git", "init", "-q", "--bare", remote)
 	r.must("git", "remote", "add", "origin", remote)
 	if _, errs, code := r.run("git", "push", "-q", "origin", "main"); code == 0 || !strings.Contains(errs, "problem(s)") {
 		t.Errorf("pre-push let the bad commits through: exit %d\n%s", code, errs)
+	}
+	if _, errs, code := r.run("git", "push", "-q", remote, "main"); code == 0 || !strings.Contains(errs, "problem(s)") {
+		t.Errorf("pre-push to a URL let the bad commits through: exit %d\n%s", code, errs)
+	}
+	// Deleting a ref has nothing to check.
+	if _, errs, code := r.run("git", "push", "-q", "other", ":main"); code != 0 {
+		t.Errorf("pre-push blocked a deletion: exit %d\n%s", code, errs)
 	}
 
 	// key list and key rm.

@@ -34,11 +34,14 @@ exec segscan hook
 `
 
 const prePushHook = `#!/bin/sh
-# segscan: blocking checks of every pushed commit.
+# segscan: blocking checks of every pushed commit. $1 is the remote name, or
+# its URL when there is none; only that remote's refs are taken as checked.
 command -v segscan >/dev/null 2>&1 || { echo "pre-push: segscan is not in PATH" >&2; exit 1; }
+remote=$1
 while read -r lref loid rref roid; do
 	case "$loid" in *[!0]*) ;; *) continue ;; esac   # a deleted ref
-	range="$loid --not --remotes"
+	range="$loid"
+	git config --get "remote.$remote.url" >/dev/null 2>&1 && range="$loid --not --remotes=$remote"
 	case "$roid" in *[!0]*) git cat-file -e "$roid^{commit}" 2>/dev/null && range="$roid..$loid" ;; esac
 	segscan check -range "$range" || exit 1
 done
