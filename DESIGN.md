@@ -173,7 +173,10 @@ commit. A run that merely happened is not enough: if it reported the value,
 the leak is still there and the retired value is what keeps finding it.
 
 Secret files are kept the same way. When `import -secret <name>` replaces
-`files/<name>`, the old content moves to `retired-files/<name>.<date>`
+`files/<name>`, the old content moves to
+`retired-files/<name>.<UTC timestamp>.<n>`, created with `O_EXCL` and the
+next free `<n>`, so a second replacement on the same day or second never
+overwrites an earlier retired version
 (mode 0600). Check 6 searches it like a current secret file, and
 `key forget <name>` drops it under the same condition.
 
@@ -393,6 +396,9 @@ The steps:
 7. It runs the statistical scanner on the result and prints the number of
    findings, with details under `-v`.
 8. The files written into the tree belong to `$SUDO_UID:$SUDO_GID`, not root.
+   So do the files `import -secret` writes into the keystore (`files/` and
+   `retired-files/`): they are created with mode 0600 and `fchown`ed to the
+   keystore owner, so the next run without sudo accepts them.
 
 A file that holds no placeholders after import is still listed in the
 manifest. A path given with `-secret <name>` is not copied into the tree:
@@ -530,9 +536,10 @@ because only the deploy machine runs check 6. The state holds:
   the value, with a new transform chain in the repository, and with a
   segscan release that adds or changes a transform, and any of these counts
   as a change. For every secret file in `files/`, a digest of its name and
-  of every form searched for it. All digests are HMAC-SHA256
-  with a random per-keystore salt kept in the same file, so the state does
-  not help to guess a value.
+  of every form searched for it. All digests are HMAC-SHA256 under a random
+  256-bit key kept in its own file, `check.key` (mode 0600), not in
+  `check.state`. The state alone does not help to guess a value: without the
+  key, a candidate cannot be tested against a digest offline.
 
 The state only advances after a complete run with no findings: tips and
 digests are written then and only then. A run with findings, or one that
@@ -582,7 +589,11 @@ unified diff on stdin).
 ```
 manifest pull  -node <node> [path...]   record live attributes for files already in the tree   (sudo)
 manifest check -node <node> [path...]   compare manifest and live attributes
-manifest apply -node <node> [path...]   set live attributes from the manifest, content untouched   (sudo)
+manifest apply -node <node> [path...]   set live attributes from the manifest, content untouched   (sudo);
+                                        same descriptor walk as -install (6.4): an undeclared
+                                        symlink on the way is an error, and every change is made
+                                        on the opened descriptor (fchmod, fchown, fsetxattr), never
+                                        by path
 manifest fix                            add entries for new files, drop entries of deleted ones
 ```
 
@@ -633,7 +644,12 @@ never dropped.
 
 ## 8. Binary files
 
-A file with a NUL in its first 8000 bytes is binary.
+A file with a NUL in its first 8000 bytes is binary. Containers that check 6
+unpacks are recognized before that test, whatever their first bytes:
+gzip (`1f 8b`), zip (`PK\x03\x04`), PDF (`%PDF-`), and brotli by the `.br`
+name, since brotli has no magic number. A PDF or a `.br` file with no NUL
+near the start is still unpacked for the exact scan, and is also scanned as
+text.
 
 - `scan` and `hook` without `.sec/`: skipped, as now.
 - `check`, and `scan`/`hook` inside `.sec/` with `binary = scan`: the file is
