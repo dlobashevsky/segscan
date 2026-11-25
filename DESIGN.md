@@ -118,7 +118,7 @@ forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never b
 ### 4.2 `.sec/names`
 
 ```
-<name> TAB <uuid> [TAB <scope>]
+<name> TAB <uuid> [TAB <scope> [TAB <flags>]]
 ```
 
 - `name`: `[A-Za-z0-9_.]+`, unique.
@@ -129,6 +129,12 @@ forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never b
 - `scope`: optional comma-separated path globs relative to the repository
   root (`nodes/*/etc/nginx/**`). If given, a placeholder of this key outside
   the scope is an error, and `import` replaces the value only inside it.
+  Empty when there is no scope but there are flags.
+- `flags`: optional, comma-separated. The only flag is `base58`: the value
+  is always base58 (our own keys, `key add -base58`). `key set` refuses any
+  other value for such a key. Every transform that only escapes characters
+  (`urlenc`, `dq`, `nginxq`, `sq`, `xml`) leaves base58 unchanged, so for
+  these keys `import` treats those forms as the bare value (6.3).
 
 The file is kept sorted by name; `key add` and `key rm` rewrite it.
 
@@ -209,7 +215,7 @@ idempotent and `drift` (7.4) shows only real changes.
 | `urlenc` | percent-encoding, RFC 3986 unreserved kept, upper-case hex | query strings, nginx proxying to play |
 | `dq` | JSON string escaping: `\\`, `\"`, `\t`, `\r`, `\n`, other bytes below 0x20 and 0x7f as `\u00XX` | inside "..." in JSON, TOML basic strings, YAML double-quoted |
 | `nginxq` | `\\`, `\"`, `\t`, `\r`, `\n`; any other control byte is an error | inside "..." in nginx |
-| `sq` | `'` replaced with `'\''` | inside '...' in sh |
+| `sq` | `'` replaced with `'\''`; NUL is an error | inside '...' in sh |
 | `xml` | `& < > " '` as entities | XML text and attributes |
 
 Example: `Basic !SECKEY_ch_sts_<uuid>:b64!`. Salted hashes (bcrypt, apr1,
@@ -256,7 +262,8 @@ exists). The existing `install` command is unchanged and writes
 ### 6.2 `key`
 
 ```
-key add <name> [-scope GLOB,...]    new name + uuid in names; prints the placeholder   (no keystore)
+key add <name> [-scope GLOB,...] [-base58]
+                                    new name + uuid in names; prints the placeholder   (no keystore)
 key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen: N chars of base58
                                     from crypto/rand (the house standard for our own keys)   (keystore)
 key rm  <name>                      from names; refuses while a placeholder still uses it
@@ -287,17 +294,30 @@ and rewrites it (needs the keystore):
    occurrence is replaced with the placeholder for that form.
 2. If two keys produce the same form, that is an error naming both keys,
    because the placeholder cannot be chosen.
-3. Round trip: the rewritten file is expanded in memory and must equal the
+3. Forms of one key can be equal too: an alphanumeric value is unchanged by
+   `urlenc`, `xml`, `sq`, `dq` and `nginxq`. The text then does not say
+   which transform the place needs, and a wrong choice would only show
+   after a rotation to a value with reserved characters. For an occurrence
+   that matches several forms of one key, `import` takes, in order:
+   - the placeholder the repository already has at that place: the same
+     file, the same line once the placeholder is expanded, and the same
+     position on the line;
+   - for a `base58` key (4.2), the bare value;
+   - otherwise nothing. It stops, writes no file, and lists each such
+     place with the candidate transforms. The user then writes the
+     placeholder into the tree by hand, or gives `-form <file>:<line>=<transform>`,
+     and runs `import` again.
+4. Round trip: the rewritten file is expanded in memory and must equal the
    original byte for byte. If it does not, nothing is written.
-4. It reports per key: number of occurrences and files. A short value
+5. It reports per key: number of occurrences and files. A short value
    matches ordinary text as well, and a rotation would then change unrelated
    lines. A key whose value is short or cheap under the cost model, or that
    is replaced in an unexpected file, is listed as a warning.
-5. It records the file's type, mode, owner, group, ACL, xattrs and SELinux
+6. It records the file's type, mode, owner, group, ACL, xattrs and SELinux
    context in the manifest.
-6. It runs the statistical scanner on the result and prints the number of
+7. It runs the statistical scanner on the result and prints the number of
    findings, with details under `-v`.
-7. The files written into the tree belong to `$SUDO_UID:$SUDO_GID`, not root.
+8. The files written into the tree belong to `$SUDO_UID:$SUDO_GID`, not root.
 
 A file that holds no placeholders after import is still listed in the
 manifest. A path given with `-secret <name>` is not copied into the tree:
@@ -382,15 +402,16 @@ made elsewhere skipped check 6.
 because only the deploy machine runs check 6. The state holds:
 
 - the ref tips already checked;
-- for every key, a digest of name, uuid and value: HMAC-SHA256 with a random
-  per-keystore salt kept in the same file, so the state does not help to
-  guess a value.
+- for every key, a digest of name, uuid and value, and for every secret
+  file in `files/`, a digest of its name and content. Both are HMAC-SHA256
+  with a random per-keystore salt kept in the same file, so the state does
+  not help to guess a value.
 
 On the next run:
 
 - commits not reachable from the stored tips are checked with every key;
-- a key that is new or whose digest changed is checked against the whole
-  history.
+- a key or secret file that is new, or whose digest changed, is checked
+  against the whole history.
 
 `--all -full` ignores the state.
 
@@ -497,12 +518,13 @@ A file with a NUL in its first 8000 bytes is binary.
 
 ```sh
 #!/bin/sh
-segscan check --staged || exit 1
-segscan hook -warn
+segscan check -staged || exit 1
+exec segscan hook          # warn, block or off: hook_scan
 ```
 
-`.sec/hooks/pre-push`: runs `segscan check --range` for every pushed ref,
-using the ranges git gives on stdin.
+`.sec/hooks/pre-push` runs `segscan check -range` for every pushed ref. The
+range is `remote..local`, or `local --not --remotes` for a new ref or a
+remote commit that is not here.
 
 Both expect `segscan` in `$PATH`. If it is missing they fail with a message
 rather than pass silently.
