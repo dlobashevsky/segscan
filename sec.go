@@ -275,6 +275,9 @@ func isUUID(b []byte, anyCase bool) bool {
 
 var phPrefix = []byte("!SECKEY_")
 
+// maxTransforms bounds a chain: :b64 repeated grows the result exponentially.
+const maxTransforms = 4
+
 // knownTransforms are the transforms of DESIGN.md 5.2.
 var knownTransforms = map[string]bool{
 	"sha256": true, "dsha1": true, "b64": true, "b64nl": true, "b64url": true,
@@ -354,6 +357,9 @@ func parsePlaceholder(line []byte, i int) (placeholder, string) {
 			return placeholder{}, "empty transform after ':'"
 		}
 		p.Transforms = append(p.Transforms, string(line[k+1:t]))
+		if len(p.Transforms) > maxTransforms {
+			return placeholder{}, fmt.Sprintf("more than %d transforms", maxTransforms)
+		}
 		k = t
 	}
 	if k >= len(line) || line[k] != '!' {

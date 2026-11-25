@@ -27,6 +27,8 @@ func TestParsePlaceholders(t *testing.T) {
 		{"!SECKEY_a_" + testUUID, nil, nil, []string{"no closing"}},
 		{"!SECKEY_a_" + testUUID + ":!", nil, nil, []string{"empty transform"}},
 		{"!SECKEY_.._" + testUUID + "!", nil, nil, []string{"starts with '.'"}},
+		{ph("k", "b64", "b64", "b64", "b64"), []string{"k"}, [][]string{{"b64", "b64", "b64", "b64"}}, nil},
+		{ph("k", "b64", "b64", "b64", "b64", "b64"), nil, nil, []string{"more than 4 transforms"}},
 		{"!SECKEY_bad! and " + ph("ok"), []string{"ok"}, [][]string{nil}, []string{"no uuid"}},
 	} {
 		good, bad := parsePlaceholders([]byte(c.line))
