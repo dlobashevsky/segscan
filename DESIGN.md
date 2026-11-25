@@ -291,9 +291,14 @@ and rewrites it (needs the keystore):
 
 1. For every key, it builds the set of forms to search for: the value under
    no transform, under each single transform in 5.2, and under every
-   transform chain already used for that key in the repository. Forms are
-   searched longest first. Inside the key's scope, if it has one, each
-   occurrence is replaced with the placeholder for that form.
+   transform chain already used for that key in the repository. A
+   transform that cannot represent the value (5.2) gives no form and is
+   left out of the set, here and in check 6; it is an error only where a
+   placeholder asks for it (`expand`, the round trip). Forms are searched
+   longest first. Inside the key's scope, if it has one, each occurrence is
+   replaced with the placeholder for that form. An occurrence outside the
+   scope is an error: `import` stops, writes no file, and lists the places,
+   because leaving it would put the value into the tree in clear.
 2. If two keys produce the same form, that is an error naming both keys,
    because the placeholder cannot be chosen.
 3. Forms of one key can be equal too: an alphanumeric value is unchanged by
@@ -342,7 +347,11 @@ Needs the keystore.
 - `-to <dir>`: writes the files under `dir` mode 0600, directories 0700.
   `dir` must be outside the repository. This is for review and for deploy
   tools that copy files themselves.
-- `-install <root>` (usually `/`, under sudo), for every file:
+- `-install <root>` (usually `/`, under sudo) first handles the type `d`
+  entries, parents before children. A missing directory is created with the
+  mode, owner, group and other attributes of its entry, and an existing one
+  gets them applied. A directory with no entry that has to be created gets
+  `0700 root:root` and a warning. Then, for every file:
   1. writes a temporary file in the target directory, mode 0600;
   2. applies owner, group, mode, ACL, xattrs and SELinux context. They come
      from the manifest. If the path is missing from the manifest, they are
@@ -536,8 +545,12 @@ A file with a NUL in its first 8000 bytes is binary.
   Values of any length are searched, so a short one is not lost between two
   NUL bytes.
 
-  Unpacking that fails, or that hits a limit, is reported as a warning, not
-  as clean.
+  Unpacking that fails, or that hits a limit, leaves part of the file
+  unread. For the statistical scanner that is a warning. For check 6 it is
+  a blocking finding (`known_value`: "not fully scanned"), because a known
+  value could sit past the limit. A file that must stay in the repository
+  anyway goes into `.sec/allow` as `path:<glob>`, which is a visible
+  decision.
 - Binary files never get placeholders and are never rewritten.
 
 ## 9. Hooks
@@ -551,8 +564,11 @@ exec segscan hook          # warn, block or off: hook_scan
 ```
 
 `.sec/hooks/pre-push` runs `segscan check -range` for every pushed ref. The
-range is `remote..local`, or `local --not --remotes` for a new ref or a
-remote commit that is not here. A deleted ref (an all-zero local id) has
+range is `remote..local`, or `local --not --remotes=<remote>` for a new ref
+or a remote commit that is not here. Only the refs of the remote being
+pushed to are excluded: a commit fetched from another remote was never
+checked for this one. When the push goes to a URL with no remote name,
+nothing is excluded and the whole ancestry is checked. A deleted ref (an all-zero local id) has
 nothing to check and is skipped.
 
 Both expect `segscan` in `$PATH`. If it is missing they fail with a message
