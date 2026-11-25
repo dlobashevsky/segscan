@@ -338,6 +338,9 @@ func parsePlaceholder(line []byte, i int) (placeholder, string) {
 	if bytes.IndexByte(name, '-') >= 0 {
 		return placeholder{}, "'-' in the name"
 	}
+	if name[0] == '.' {
+		return placeholder{}, "the name starts with '.'"
+	}
 	p := placeholder{Col: i, Name: string(name), UUID: string(u)}
 	for k < len(line) && line[k] == ':' {
 		t := k + 1

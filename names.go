@@ -26,8 +26,10 @@ type nameList struct {
 
 const namesHeader = "# segscan key names: name<TAB>uuid[<TAB>scope,...[<TAB>flags]]. No values here.\n"
 
+// validName: [A-Za-z0-9_][A-Za-z0-9_.]*. No leading '.', so a name used as
+// a file name (secret=<name>) is one path component and never "." or "..".
 func validName(s string) bool {
-	if s == "" {
+	if s == "" || s[0] == '.' {
 		return false
 	}
 	for i := 0; i < len(s); i++ {

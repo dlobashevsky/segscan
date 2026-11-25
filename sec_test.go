@@ -26,6 +26,7 @@ func TestParsePlaceholders(t *testing.T) {
 		{"!SECKEY_a" + testUUID + "!", nil, nil, []string{"no '_'"}},
 		{"!SECKEY_a_" + testUUID, nil, nil, []string{"no closing"}},
 		{"!SECKEY_a_" + testUUID + ":!", nil, nil, []string{"empty transform"}},
+		{"!SECKEY_.._" + testUUID + "!", nil, nil, []string{"starts with '.'"}},
 		{"!SECKEY_bad! and " + ph("ok"), []string{"ok"}, [][]string{nil}, []string{"no uuid"}},
 	} {
 		good, bad := parsePlaceholders([]byte(c.line))
@@ -176,8 +177,8 @@ func TestNames(t *testing.T) {
 	if got := string(l.format()); got != namesHeader+"a\t"+testUUID+"\t\tbase58\nb\t"+u2+"\tnodes/**\tbase58\n" {
 		t.Errorf("format with flags: %q", got)
 	}
-	_, probs = parseNames([]byte("a\t" + testUUID + "\na\t" + u2 + "\nb\t" + testUUID + "\nc-d\t" + u2 + "\ne\tnot-a-uuid\nf\ng\t" + u2 + "\t\thex\n"))
-	if len(probs) != 6 {
+	_, probs = parseNames([]byte("a\t" + testUUID + "\na\t" + u2 + "\nb\t" + testUUID + "\nc-d\t" + u2 + "\ne\tnot-a-uuid\nf\ng\t" + u2 + "\t\thex\n..\t" + u2 + "\n"))
+	if len(probs) != 7 {
 		t.Errorf("problems: %+v", probs)
 	}
 }
@@ -194,6 +195,9 @@ func TestManifest(t *testing.T) {
 		t.Errorf("format: %q", got)
 	}
 	for _, bad := range []string{
+		"a\ts\t0600\troot\troot\tsecret=..",
+		"a\ts\t0600\troot\troot\tsecret=../../etc/shadow",
+		"a\ts\t0600\troot\troot\tsecret=.env",
 		"/abs\tf\t0644\troot\troot",
 		"a/../b\tf\t0644\troot\troot",
 		"a\tx\t0644\troot\troot",
