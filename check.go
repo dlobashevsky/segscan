@@ -21,9 +21,10 @@ import (
 // ---------- snapshots: a set of files from the working tree, the index or a commit ----------
 
 type snapFile struct {
-	Path string
-	Link bool
-	OID  string // blob id; "" for the working tree
+	Path    string
+	Link    bool
+	Gitlink bool   // a submodule: its path is checked, its content is not read
+	OID     string // blob id; "" for the working tree
 }
 
 type snapshot struct {
@@ -43,7 +44,7 @@ func (s *snapshot) index() {
 // file returns the content of a path, or nil if the snapshot has no such regular file.
 func (s *snapshot) file(p string) []byte {
 	f := s.byPath[p]
-	if f == nil || f.Link {
+	if f == nil || f.Link || f.Gitlink {
 		return nil
 	}
 	data, err := s.read(*f)
@@ -79,15 +80,19 @@ func worktreeFiles(top string) ([]snapFile, error) {
 	var out []snapFile
 	seen := map[string]bool{}
 	for _, p := range recs {
+		p = strings.TrimSuffix(p, "/") // an untracked nested repository is listed as dir/
 		if seen[p] {
 			continue
 		}
 		seen[p] = true
 		st, err := os.Lstat(filepath.Join(top, p))
-		if err != nil || !(st.Mode().IsRegular() || st.Mode()&os.ModeSymlink != 0) {
-			continue
+		switch {
+		case err != nil:
+		case st.IsDir(): // git lists a directory only for a submodule or a nested repository
+			out = append(out, snapFile{Path: p, Gitlink: true})
+		case st.Mode().IsRegular() || st.Mode()&os.ModeSymlink != 0:
+			out = append(out, snapFile{Path: p, Link: st.Mode()&os.ModeSymlink != 0})
 		}
-		out = append(out, snapFile{Path: p, Link: st.Mode()&os.ModeSymlink != 0})
 	}
 	return out, nil
 }
@@ -113,11 +118,11 @@ func indexSnapshot(top string, cf *catFile) (*snapshot, error) {
 		// <mode> <oid> <stage>\t<path>
 		meta, p, ok := strings.Cut(r, "\t")
 		f := strings.Fields(meta)
-		if !ok || len(f) != 3 || seen[p] || f[0] == "160000" {
+		if !ok || len(f) != 3 || seen[p] {
 			continue
 		}
 		seen[p] = true
-		s.Files = append(s.Files, snapFile{Path: p, Link: f[0] == "120000", OID: f[1]})
+		s.Files = append(s.Files, snapFile{Path: p, Link: f[0] == "120000", Gitlink: f[0] == "160000", OID: f[1]})
 	}
 	s.index()
 	return s, nil
@@ -133,10 +138,10 @@ func commitSnapshot(top string, cf *catFile, commit string) (*snapshot, error) {
 		// <mode> <type> <oid>\t<path>
 		meta, p, ok := strings.Cut(r, "\t")
 		f := strings.Fields(meta)
-		if !ok || len(f) != 3 || f[1] != "blob" {
+		if !ok || len(f) != 3 || f[1] != "blob" && f[1] != "commit" {
 			continue
 		}
-		s.Files = append(s.Files, snapFile{Path: p, Link: f[0] == "120000", OID: f[2]})
+		s.Files = append(s.Files, snapFile{Path: p, Link: f[0] == "120000", Gitlink: f[1] == "commit", OID: f[2]})
 	}
 	s.index()
 	return s, nil
@@ -362,7 +367,9 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 		}
 		inSec := strings.HasPrefix(f.Path, secDir+"/")
 		if hasSec && !inSec {
-			if _, ok := cfg.nodeRoot(f.Path); ok {
+			if _, ok := cfg.nodeRoot(f.Path); ok && f.Gitlink {
+				add(f.Path, 0, 0, ckManifest, "a submodule under a node root cannot be described by the manifest")
+			} else if ok {
 				e := man[f.Path]
 				want := "f"
 				if f.Link {
@@ -378,7 +385,7 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 				}
 			}
 		}
-		if f.Link {
+		if f.Link || f.Gitlink {
 			continue
 		}
 		fi := ck.info(s, f)

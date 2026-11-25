@@ -129,7 +129,7 @@ func keyUses(top string) map[string]map[string]int {
 	uses := map[string]map[string]int{}
 	ck := &checker{top: top, cache: map[string]*fileInfo{}}
 	for _, f := range s.Files {
-		if f.Link || strings.HasPrefix(f.Path, secDir+"/") {
+		if f.Link || f.Gitlink || strings.HasPrefix(f.Path, secDir+"/") {
 			continue
 		}
 		for _, p := range ck.info(s, f).phs {
@@ -316,6 +316,10 @@ func manifestFix(args []string) {
 		}
 		root, ok := cfg.nodeRoot(f.Path)
 		if !ok {
+			continue
+		}
+		if f.Gitlink {
+			fmt.Fprintf(os.Stderr, "! %s\tnot added: a submodule\n", f.Path)
 			continue
 		}
 		present[f.Path] = true

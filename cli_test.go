@@ -236,6 +236,17 @@ func TestCLIConfigRepository(t *testing.T) {
 	r.must("git", "rm", "-q", "--cached", ".sec/leak.pem")
 	r.must("rm", ".sec/leak.pem")
 
+	// Submodules (gitlinks) keep their paths: forbidden paths and node roots
+	// are checked for them too.
+	head := strings.TrimSpace(r.must("git", "rev-parse", "HEAD"))
+	r.must("git", "update-index", "--add", "--cacheinfo", "160000,"+head+",.sec/keys")
+	r.must("git", "update-index", "--add", "--cacheinfo", "160000,"+head+",nodes/n1/etc/sub")
+	out, _, code = r.run("segscan", "check", "-staged")
+	if code != 1 || !strings.Contains(out, ".sec/keys\t0\t0\tforbidden") || !strings.Contains(out, "nodes/n1/etc/sub\t0\t0\tmanifest\ta submodule") {
+		t.Errorf("gitlinks in the index: exit %d\n%s", code, out)
+	}
+	r.must("git", "rm", "-q", "-f", "--cached", ".sec/keys", "nodes/n1/etc/sub")
+
 	// A broken .sec/config in the working tree does not stop checking the
 	// history; it is only a finding of the working tree.
 	cfg := r.read(".sec/config")
