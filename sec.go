@@ -275,7 +275,7 @@ var phPrefix = []byte("!SECKEY_")
 // knownTransforms are the transforms of DESIGN.md 5.2.
 var knownTransforms = map[string]bool{
 	"sha256": true, "dsha1": true, "b64": true, "b64nl": true, "b64url": true,
-	"urlenc": true, "dq": true, "sq": true, "xml": true,
+	"urlenc": true, "dq": true, "nginxq": true, "sq": true, "xml": true,
 }
 
 type placeholder struct {
