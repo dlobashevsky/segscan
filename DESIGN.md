@@ -167,8 +167,10 @@ An old value can still be live (the rotation is not deployed yet) and can
 still sit in commits made elsewhere that no `check --all` has seen. Check 6
 searches every form of every retired value like a current one, and reports
 it as "retired value of <name>". A retired value leaves the file only with
-`key forget <name>`, which refuses while `check --all` has not run since the
-value was retired.
+`key forget <name>`. It refuses unless a complete `check --all` has run since
+the value was retired, and that run found no form of it in any reachable
+commit. A run that merely happened is not enough: if it reported the value,
+the leak is still there and the retired value is what keeps finding it.
 
 Secret files are kept the same way. When `import -secret <name>` replaces
 `files/<name>`, the old content moves to `retired-files/<name>.<date>`
@@ -220,6 +222,13 @@ name       [A-Za-z0-9_][A-Za-z0-9_.]*
 uuid       [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 transform  [a-z0-9]+
 ```
+
+A placeholder has at most 4 transforms. Every form that a chain produces,
+including the intermediate ones, is at most 64 KiB. Longer chains are an
+error in the grammar check, and a form over the limit is an error for
+`expand`, `import` and check 6. Without these limits, `:b64` repeated many
+times in a small file would grow the result exponentially and exhaust the
+memory of every hook and of the deploy machine.
 
 The name cannot contain `-` and the uuid always does, so the last `_` before
 the uuid ends the name and parsing is unambiguous. A text that starts with
@@ -391,6 +400,11 @@ its content goes to `files/<name>` in the keystore and the manifest gets a
 type `s` entry. `-n` prints what would change without writing.
 
 Binary files are copied as they are, without replacement, and scanned (8).
+Before a binary is written into the tree, `import` runs check 6 on its bytes
+(current and retired values, secret files). A finding stops the import and
+nothing is written, as with a known value outside its scope: the raw value
+must never reach the working tree. Such a file belongs in the keystore,
+with `-secret <name>`.
 
 ### 6.4 `expand` (repository -> node)
 
@@ -405,7 +419,10 @@ Needs the keystore.
   first and reported together. If there is any, nothing is written.
 - `-to <dir>`: writes the files under `dir` mode 0600, directories 0700.
   `dir` must be outside the repository. This is for review and for deploy
-  tools that copy files themselves.
+  tools that copy files themselves. The writes use the same descriptor walk
+  as `import` (6.3), beneath `dir` and with no symlink followed, so an
+  existing `dir/etc -> ~/.ssh` cannot redirect them. Symlinks of the
+  configuration (type `l`) are created as symlinks.
 - `-install <root>` (usually `/`, under sudo) never writes through a symlink
   it was not told about. Every existing component below `<root>` on the way
   to a target must be a plain directory, or a symlink that the manifest of
@@ -516,6 +533,11 @@ because only the deploy machine runs check 6. The state holds:
   of every form searched for it. All digests are HMAC-SHA256
   with a random per-keystore salt kept in the same file, so the state does
   not help to guess a value.
+
+The state only advances after a complete run with no findings: tips and
+digests are written then and only then. A run with findings, or one that
+stopped early, leaves the state as it was, so the next run checks the same
+history again and reports the same findings until they are fixed.
 
 On the next run:
 
