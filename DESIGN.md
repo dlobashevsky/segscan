@@ -1,0 +1,499 @@
+# segscan: secrets out of a configuration repository
+
+Status: draft, for review. Nothing here is implemented yet.
+
+## 1. Goal
+
+A repository holds the configuration of a cluster: large parts of `/etc`
+from every node. It is read by people and tools that plan the
+infrastructure, including an AI assistant working in a cloud session, and it
+lives on GitHub. None of them may see a credential.
+
+The real values exist in one place only: the keystore on the deploy machine.
+The repository holds placeholders. segscan turns a placeholder tree into real
+files on the way to a node (`expand`), turns real files back into
+placeholders on the way into the repository (`import`), and checks every
+commit (`check`, `hook`).
+
+Two kinds of leak are handled differently:
+
+| Leak | Detection | Blocks the commit |
+|---|---|---|
+| A **known** value (it is in the keystore), in any of its encodings | exact match | yes, no false positives |
+| An **unknown** value (nobody has put it in the keystore yet) | the statistical scanner (`scan`, `hook`) | no, it warns |
+
+The statistical scanner stays advisory: on a tree of `/etc` it has too many
+false positives to block on. Its allowlist and model grow by hand on the
+deploy machine and are committed, so the noise goes down over time.
+
+### Non-goals
+
+- Protecting the deploy machine itself, or a node once it is compromised.
+- Catching an unknown secret with certainty. The statistical scanner misses
+  dictionary passwords, short hex and digits-only secrets (see README).
+- Exact-match checks on machines without the keystore. Commits made there
+  get grammar and consistency checks only, and are checked again by the
+  deploy machine on its next `check --all`.
+
+## 2. Backward compatibility
+
+Every new behaviour switches on only when one of these is true:
+
+- the repository has a `.sec/` directory;
+- a new command is used;
+- a new flag is given.
+
+Without `.sec/`, `scan`, `diff`, `hook`, `train`, `install`, `calib` and
+`explain` behave exactly as they do now, with the same defaults, output and
+exit codes.
+
+New flag for the scanner commands: `-skip-uuids` (also `--skip-uuids`, as the
+`flag` package accepts both). It is off by default and on by default inside a
+`.sec/` repository (`skip_uuids` in `.sec/config`). See 5.3 for what it skips.
+
+## 3. Layout
+
+### 3.1 In the repository (committed, no secret inside)
+
+```
+.sec/
+  config          settings, see 4.1
+  names           the keys: name, uuid, optional scope; no values
+  manifest        owner, group, mode and type of every file under a node root
+  allow           statistical allowlist (the existing .segscan-allow format)
+  segscan.model   the repository model (segscan train)
+  hooks/          pre-commit, pre-push; core.hooksPath points here
+nodes/<node>/...  files of each node, with placeholders
+```
+
+`allow` holds fingerprints, the first 48 bits of sha256 of a finding, never
+the finding itself, so a real secret allowlisted by mistake does not end up
+in git in clear.
+
+`segscan.model` holds dictionary fragments of the tree it was trained on.
+That tree contains placeholders, not values. `train` refuses to run when the
+keystore is available and any of its values, in any encoding, occurs in the
+input (see 6.6).
+
+### 3.2 Outside the repository (deploy machine only)
+
+```
+~/.secshell/<project>/     path from .sec/config, overridden by $SEGSCAN_KEYSTORE
+  keys                     name, uuid, value; mode 0600
+  files/<name>             secrets that are whole files: .htpasswd, PEM keys, .env; mode 0600
+```
+
+The directory and every file in it must be mode 0600 or 0700 and owned by
+the invoking user (or root under sudo), as ssh requires for its keys.
+Otherwise segscan refuses to read them.
+
+The keystore is not kept under `.gitignore` inside the tree: `git add -f`,
+`git clean -fdx`, a `tar` or `rsync` of the tree, and IDE indexing all go
+around `.gitignore`. A symlink `.sec/keys -> ~/.secshell/<project>` is
+allowed for convenience; `.sec/.gitignore` ignores it, and `git clean`
+removes the link, not the target. `keys sync <host>` copies the keystore to
+another machine over ssh with the modes kept.
+
+## 4. File formats
+
+All files are UTF-8 text with LF line ends. `#` at the start of a line begins
+a comment and blank lines are ignored, except in `keys` (see 4.3). Fields are
+separated by one TAB.
+
+### 4.1 `.sec/config`
+
+`key = value` lines:
+
+```
+project     = cluster
+keystore    = ~/.secshell/cluster
+roots       = nodes/*          # where a node tree starts: nodes/n1/etc/... -> /etc/...
+skip_uuids  = placeholders     # placeholders | all | off   (5.3)
+binary      = scan             # scan | skip: binary files in check/hook (8)
+hook_scan   = warn             # warn | block | off: the statistical part of the hook
+forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never be committed
+```
+
+### 4.2 `.sec/names`
+
+```
+<name> TAB <uuid> [TAB <scope>]
+```
+
+- `name`: `[A-Za-z0-9_.]+`, unique.
+- `uuid`: random (v4), lower-case canonical form, generated by `key add`,
+  unique. It binds a placeholder to this key in this project. A key of the
+  same name in another project has another uuid, so the wrong keystore is
+  detected instead of silently used.
+- `scope`: optional comma-separated path globs relative to the repository
+  root (`nodes/*/etc/nginx/**`). If given, a placeholder of this key outside
+  the scope is an error, and `import` replaces the value only inside it.
+
+The file is kept sorted by name; `key add` and `key rm` rewrite it.
+
+### 4.3 keystore `keys`
+
+```
+<name> TAB <uuid> TAB <value>
+```
+
+The value is everything after the second TAB up to the end of the line,
+byte for byte: it may contain spaces, `#` and TABs and is not trimmed. It
+cannot contain LF; a multi-line value is a file in `files/`. Comment lines
+start with `#` in the first column. There are no requirements on the length
+or strength of a value, because values are often set by other tools or other
+teams. Weak values are reported by `key check -weak`, using the scanner's
+cost model.
+
+### 4.4 `.sec/manifest`
+
+```
+<path> TAB <type> TAB <mode> TAB <owner> TAB <group> [TAB <attr>...]
+```
+
+- `path`: repository path (`nodes/n1/etc/nginx/nginx.conf`). The target path
+  is the path minus the node root.
+- `type`: `f` file, `d` directory, `l` symlink (the target is in git itself),
+  `s` secret file taken from the keystore's `files/` (the repository holds no
+  file at this path; see 7.2).
+- `mode`: octal, with setuid/setgid/sticky (`0640`, `2775`).
+- `owner`, `group`: names, not numbers, because ids differ between nodes.
+- `attr`: zero or more `k=v`:
+  - `secret=<name>` for type `s`;
+  - `acl=<text>` (getfacl short form, `,`-separated);
+  - `xattr.<name>=<base64>`;
+  - `selinux=<context>`.
+
+## 5. Placeholders
+
+### 5.1 Grammar
+
+```
+!SECKEY_<name>_<uuid>[:<transform>]...!
+
+name       [A-Za-z0-9_.]+
+uuid       [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+transform  [a-z0-9]+
+```
+
+The name cannot contain `-` and the uuid always does, so the last `_` before
+the uuid ends the name and parsing is unambiguous. A text that starts with
+`!SECKEY_` but does not match the grammar is an error in `check` and
+`expand`. It is never passed through.
+
+Placeholders are recognised in text files only. In a binary file a
+placeholder is an error.
+
+### 5.2 Transforms
+
+Transforms are applied left to right to the value. All of them are
+deterministic: the same value always gives the same text, so `expand` is
+idempotent and `drift` (7.4) shows only real changes.
+
+| Transform | Result | Typical use |
+|---|---|---|
+| (none) | the value | most places |
+| `sha256` | lower-case hex sha256 | ClickHouse `password_sha256_hex` |
+| `dsha1` | lower-case hex sha1(sha1(value)) | ClickHouse `password_double_sha1_hex`, MySQL |
+| `b64` | base64, standard alphabet, padded | `Authorization: Basic` |
+| `b64nl` | base64 of value + LF | what `echo value \| base64` produces |
+| `b64url` | base64url, unpadded | tokens in URLs |
+| `urlenc` | percent-encoding, RFC 3986 unreserved kept, upper-case hex | query strings, nginx proxying to play |
+| `dq` | `\` and `"` escaped with `\` | inside "..." (nginx, TOML, JSON, YAML) |
+| `sq` | `'` replaced with `'\''` | inside '...' in sh |
+| `xml` | `& < > " '` as entities | XML text and attributes |
+
+Example: `Basic !SECKEY_ch_sts_<uuid>:b64!`. Salted hashes (bcrypt, apr1,
+crypt) cannot be transforms, because each run would produce new text. Files
+that hold them (`.htpasswd`) are secret files (type `s`).
+
+New transforms can be added later; an unknown one is an error.
+
+### 5.3 What `-skip-uuids` skips
+
+The statistical scanner would report every placeholder, because 32 hex
+digits cost about 4.5-5 bits per char. With `-skip-uuids`:
+
+- `placeholders` (the default inside `.sec/`): every well-formed
+  `!SECKEY_..!` span is blanked before the line is scored, so the text around
+  it is still scanned.
+- `all`: also every bare canonical UUID. This lowers the noise further but
+  loses UUID-shaped secrets (Sensu and Proxmox API tokens, some client
+  secrets are UUIDs). It is opt-in for that reason.
+
+`-skip-uuids` on the command line means `all`. In `.sec/config`,
+`skip_uuids` can choose `placeholders`.
+
+## 6. Commands
+
+The existing commands stay. New ones are listed below. Commands that need
+the keystore say so; without it they exit 2 with a message naming the path
+they tried.
+
+### 6.1 `init`
+
+Creates `.sec/` with `config`, an empty `names`, `manifest`, `allow`,
+`.gitignore` and `hooks/`, and runs `git config core.hooksPath .sec/hooks`.
+Run it again in every new clone (it only sets the hooks path when `.sec/`
+exists). The existing `install` command is unchanged and writes
+`.git/hooks/pre-commit` as before.
+
+### 6.2 `key`
+
+```
+key add <name> [-scope GLOB,...]    new name + uuid in names; prints the placeholder   (no keystore)
+key set <name> [-gen N]             value from stdin (no echo on a tty) or N random base58 chars   (keystore)
+key rm  <name>                      from names; refuses while a placeholder still uses it
+key list                            names, scopes, where each is used, and how often
+key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
+                                    -weak: values the cost model finds guessable   (keystore)
+keys sync <host>:<path>             copy the keystore with modes kept (ssh)   (keystore)
+```
+
+`key add` works without the keystore. This is the normal flow for someone
+who plans changes without access to the values: they add the name, use the
+placeholder, and the deploy machine fills in the value with `key set` when
+`expand` reports it as missing.
+
+### 6.3 `import` (node -> repository)
+
+```
+sudo segscan import [-n] -node <node> <abs-path>...
+```
+
+Copies `/<abs-path>` from the running system into `nodes/<node>/<abs-path>`
+and rewrites it (needs the keystore):
+
+1. For every key, it builds the set of forms to search for: the value under
+   no transform, under each single transform in 5.2, and under every
+   transform chain already used for that key in the repository. Forms are
+   searched longest first. Inside the key's scope, if it has one, each
+   occurrence is replaced with the placeholder for that form.
+2. If two keys produce the same form, that is an error naming both keys,
+   because the placeholder cannot be chosen.
+3. Round trip: the rewritten file is expanded in memory and must equal the
+   original byte for byte. If it does not, nothing is written.
+4. It reports per key: number of occurrences and files. A short value
+   matches ordinary text as well, and a rotation would then change unrelated
+   lines. A key whose value is short or cheap under the cost model, or that
+   is replaced in an unexpected file, is listed as a warning.
+5. It records the file's type, mode, owner, group, ACL, xattrs and SELinux
+   context in the manifest.
+6. It runs the statistical scanner on the result and prints the number of
+   findings, with details under `-v`.
+7. The files written into the tree belong to `$SUDO_UID:$SUDO_GID`, not root.
+
+A file that holds no placeholders after import is still listed in the
+manifest. A path given with `-secret <name>` is not copied into the tree:
+its content goes to `files/<name>` in the keystore and the manifest gets a
+type `s` entry. `-n` prints what would change without writing.
+
+Binary files are copied as they are, without replacement, and scanned (8).
+
+### 6.4 `expand` (repository -> node)
+
+```
+segscan expand [-n] -node <node> (-to <dir> | -install <root>) [path...]
+```
+
+Needs the keystore.
+
+- It resolves every placeholder in the selected files. Missing keys, uuid
+  mismatches, malformed placeholders and unknown transforms are collected
+  first and reported together. If there is any, nothing is written.
+- `-to <dir>`: writes the files under `dir` mode 0600, directories 0700.
+  `dir` must be outside the repository. This is for review and for deploy
+  tools that copy files themselves.
+- `-install <root>` (usually `/`, under sudo), for every file:
+  1. writes a temporary file in the target directory, mode 0600;
+  2. applies owner, group, mode, ACL, xattrs and SELinux context. They come
+     from the manifest. If the path is missing from the manifest, they are
+     copied from the existing target. A new file with no manifest entry gets
+     `0600 root:root` and a warning;
+  3. `fsync`s it, then `rename`s it over the target, so a service never
+     reads a half-written file.
+
+  Type `s` entries are copied from `files/<name>` the same way, and type `l`
+  entries create the symlink. A file whose content and attributes are
+  already right is not touched. The command prints the list of changed
+  files, never the values.
+- `-n` lists the files that would change and, for attributes, the old and
+  new values.
+
+### 6.5 `check`
+
+```
+segscan check [--staged | --range A..B | --all]
+```
+
+Blocking checks (exit 1):
+
+1. **Grammar.** Every `!SECKEY_` is a well-formed placeholder (5.1) with
+   known transforms.
+2. **Names.** Every placeholder's name and uuid are in `names`, and are used
+   inside its scope.
+3. **Manifest.** Every file under a node root has a manifest entry, and every
+   type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
+4. **Forbidden paths.** No staged path matches `forbid`, the keystore path or
+   `.sec/keys`.
+5. **Private keys.** No `PRIVATE KEY` block (the existing detector).
+6. **Known values** (only when the keystore is available). No value of any
+   key occurs, in any form from 6.3 step 1, in text, or in the strings of a
+   binary file (8). The report names the key, file and line, never the
+   value.
+
+The first check that fails is reported with all its findings; the others
+still run.
+
+Without the keystore, check 6 is skipped with a single line saying so.
+
+`--staged` checks the index (the pre-commit case). `--range` checks every
+commit in the range (pre-push). `--all` checks every commit reachable from
+any ref; run it on the deploy machine from time to time, because commits
+made elsewhere skipped check 6.
+
+### 6.6 Statistical scanner in a `.sec/` repository
+
+`scan`, `diff`, `hook` and `train` read `.sec/config`:
+
+- `-m` defaults to `.sec/segscan.model`, and `-allow` to `.sec/allow`;
+- `-skip-uuids` follows `skip_uuids`;
+- binary files are scanned via their strings when `binary = scan` (8).
+
+New flag for `hook`: `-warn`. It prints the findings in the added lines and
+exits 0. `hook_scan = warn` makes it the default inside `.sec/`.
+
+`train` with the keystore available first runs check 6 on its input. If any
+value is present it stops, so a value never becomes a dictionary word.
+
+### 6.7 `drift`
+
+```
+segscan drift -node <node> [path...]
+```
+
+Shows what changed on a running node since the last import: runs `import -n`
+in memory and prints a unified diff between the tree and the result. The diff
+is already in placeholder form, so it can be pasted anywhere. It also
+compares the manifest with the live attributes. Needs the keystore.
+
+The name is `drift` and not `diff`, because `diff` already exists (scan a
+unified diff on stdin).
+
+### 6.8 `manifest`
+
+```
+manifest pull  -node <node> [path...]   record live attributes for files already in the tree   (sudo)
+manifest check -node <node> [path...]   compare manifest and live attributes
+manifest apply -node <node> [path...]   set live attributes from the manifest, content untouched   (sudo)
+manifest fix                            add entries for new files (taken from the working tree's
+                                        files, owner/group set to root:root), drop entries of deleted ones
+```
+
+## 7. Flows
+
+### 7.1 Planning without the keys (no keystore)
+
+1. Edit files under `nodes/`.
+2. A new credential: `segscan key add ch_reports -scope 'nodes/*/etc/clickhouse-server/**'`,
+   then use the printed placeholder.
+3. A new file: `segscan manifest fix`, then correct owner, group and mode in
+   `.sec/manifest` by hand.
+4. Commit. The pre-commit hook runs `check --staged` (blocking, without
+   check 6) and `hook -warn`.
+
+### 7.2 Deploy (deploy machine)
+
+1. `git pull`.
+2. `segscan check --all`: also runs check 6 on commits made elsewhere.
+3. `segscan key check`, then `segscan key set <name>` for every missing value.
+4. `segscan expand -n -node n1 -install /`, review the list, then run it
+   without `-n` on the node, or with `-to` and the usual deploy tool.
+
+### 7.3 A change made on a node by hand
+
+1. `segscan drift -node n1`.
+2. `sudo segscan import -node n1 <paths>`.
+3. A new credential in the result: `key add`, `key set`, `import` again.
+4. Commit.
+
+### 7.4 Rotation
+
+1. `segscan key set <name>`. Name and uuid stay, so no file in the repository
+   changes.
+2. `segscan expand -install` on every node that uses the key
+   (`key list` shows them).
+3. Restart the services. segscan does not do it.
+
+## 8. Binary files
+
+A file with a NUL in its first 8000 bytes is binary.
+
+- `scan` and `hook` without `.sec/`: skipped, as now.
+- `check`, and `scan`/`hook` inside `.sec/` with `binary = scan`: the file is
+  scanned as its strings:
+  - runs of at least 8 printable ASCII bytes;
+  - runs of at least 8 UTF-16LE characters;
+  - gzip, brotli, zip and the Flate streams of a PDF are unpacked first, up to
+    64 MiB unpacked and two levels deep.
+
+  The statistical scanner reports findings in the strings with the byte
+  offset in the `col` field; check 6 looks for every form of every value.
+  Unpacking that fails, or that hits a limit, is reported as a warning, not
+  as clean.
+- Binary files never get placeholders and are never rewritten.
+
+## 9. Hooks
+
+`.sec/hooks/pre-commit`:
+
+```sh
+#!/bin/sh
+segscan check --staged || exit 1
+segscan hook -warn
+```
+
+`.sec/hooks/pre-push`: runs `segscan check --range` for every pushed ref,
+using the ranges git gives on stdin.
+
+Both expect `segscan` in `$PATH`. If it is missing they fail with a message
+rather than pass silently.
+
+## 10. Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | clean / done |
+| 1 | findings (scan, diff, hook), failed checks (check), missing keys (expand, key check) |
+| 2 | usage or I/O error, keystore unreadable or with wrong modes |
+
+## 11. Implementation stages
+
+Each stage is one pull request with tests, and keeps the existing behaviour
+and tests intact.
+
+1. **This document.**
+2. **Without the keystore:**
+   - `.sec/config`, the placeholder parser and `-skip-uuids`;
+   - `init`, `key add|rm|list`, `manifest fix`;
+   - `check` checks 1-5, `hook -warn`;
+   - `.sec/` defaults for `scan`/`hook`/`train`.
+3. **Keystore and transforms:**
+   - the keystore reader with mode checks, `key set|check`;
+   - `expand -to`, `import -n` and `import` with the round trip;
+   - `check` check 6, the `train` guard.
+4. **Attributes:** `manifest pull|check|apply`, `expand -install` with atomic
+   writes and attributes, type `s`.
+5. **Rest:** `drift`, binary scanning (8), `keys sync`, pre-push hook.
+
+## 12. Open questions
+
+1. `skip_uuids` default inside `.sec/`: `placeholders` (proposed) or `all`?
+2. `roots = nodes/*` maps `nodes/<node>/<path>` to `/<path>`. Do some nodes
+   need a different mapping (containers, chroots)?
+3. Owner and group by name: is the same user/group present on every node, or
+   does the manifest need per-node overrides?
+4. `key set -gen`: base58 by default. Is that fine for every consumer
+   (ClickHouse, nginx headers, MySQL)?
+5. Should `check --all` keep a record of the last checked commit, so the
+   deploy machine checks only new history?
