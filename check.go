@@ -382,6 +382,9 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 			out = append(out, x)
 		}
 		for _, p := range fi.phs {
+			if !hasSec {
+				break // before .sec/ existed: grammar, forbidden paths and private keys only
+			}
 			k := names.ByName[p.Name]
 			switch {
 			case k == nil:
@@ -429,7 +432,12 @@ func cmdCheck(args []string) {
 	if n > 1 || fs.NArg() > 0 {
 		die(fmt.Errorf("check: use at most one of -staged, -range, -all, and no paths"))
 	}
-	top, _ := mustSec()
+	// Not mustSec: every snapshot is checked with its own .sec/config, and a
+	// broken one is a finding of that snapshot, not an error of the command.
+	top := secRoot()
+	if top == "" {
+		die(fmt.Errorf("no %s/ in this repository: run segscan init", secDir))
+	}
 	ck := &checker{top: top, allow: loadAllow(secPath(top, "allow"), false), cache: map[string]*fileInfo{}}
 	var finds []checkFinding
 	switch {

@@ -215,6 +215,18 @@ func TestCLIConfigRepository(t *testing.T) {
 		t.Errorf("check -range of the first commit: exit %d\n%s", code, out)
 	}
 
+	// A broken .sec/config in the working tree does not stop checking the
+	// history; it is only a finding of the working tree.
+	cfg := r.read(".sec/config")
+	r.write(".sec/config", cfg+"colour = red\n")
+	if out, _, code := r.run("segscan", "check", "-range", "HEAD~2"); code != 0 {
+		t.Errorf("check -range with a broken working-tree config: exit %d\n%s", code, out)
+	}
+	if out, _, code := r.run("segscan", "check"); code != 1 || !strings.Contains(out, "\tconfig\t") {
+		t.Errorf("check of a broken working-tree config: exit %d\n%s", code, out)
+	}
+	r.write(".sec/config", cfg)
+
 	// The pre-push hook blocks the push of the bad commits.
 	remote := t.TempDir()
 	r.must("git", "init", "-q", "--bare", remote)
@@ -248,5 +260,21 @@ func TestCLIWithoutSec(t *testing.T) {
 	}
 	if _, errs, code := r.run("segscan", "check"); code != 2 || !strings.Contains(errs, "segscan init") {
 		t.Errorf("check without .sec/: exit %d %s", code, errs)
+	}
+}
+
+func TestCLIHistoryBeforeSec(t *testing.T) {
+	r := newRepo(t)
+	// A placeholder committed before .sec/ existed: only grammar, forbidden
+	// paths and private keys apply to that commit.
+	r.write("nodes/n1/etc/a.conf", "k = "+placeholderText("old", testUUID)+"\n")
+	r.must("git", "add", "-A")
+	r.must("git", "commit", "-q", "-m", "before .sec/")
+	r.must("segscan", "init")
+	if out, _, code := r.run("segscan", "check", "-all"); code != 0 {
+		t.Errorf("check -all of a commit before .sec/: exit %d\n%s", code, out)
+	}
+	if out, _, code := r.run("segscan", "check"); code != 1 || !strings.Contains(out, "unknown key old") {
+		t.Errorf("working tree with .sec/: exit %d\n%s", code, out)
 	}
 }

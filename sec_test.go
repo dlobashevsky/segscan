@@ -206,6 +206,20 @@ func TestManifest(t *testing.T) {
 	}
 }
 
+func TestPrivateKeyAfterUnterminatedBlock(t *testing.T) {
+	data := "-----BEGIN CERTIFICATE-----\nMIIB\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n"
+	fi := analyzeFile([]byte(data), loadAllow("", false))
+	if len(fi.finds) != 1 || fi.finds[0].Check != ckPrivate || fi.finds[0].Line != 3 {
+		t.Errorf("finds: %+v", fi.finds)
+	}
+	var p pemState
+	for i, l := range strings.Split(data, "\n") {
+		if _, private := p.feed([]byte(l)); private != (i == 2) {
+			t.Errorf("line %d: private = %v", i+1, private)
+		}
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	a, b := newUUID(), newUUID()
 	if !isUUID([]byte(a), false) || a == b || a[14] != '4' || !strings.ContainsRune("89ab", rune(a[19])) {

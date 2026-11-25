@@ -462,6 +462,13 @@ type pemState struct{ in bool }
 // feed reports whether to skip the line and whether it starts a private key.
 func (p *pemState) feed(line []byte) (skip, private bool) {
 	if p.in {
+		// A private key marker counts even inside a block that was never
+		// closed, or an unterminated certificate would hide the key after it.
+		if i := bytes.Index(line, []byte("-----BEGIN ")); i >= 0 {
+			private = bytes.Contains(line[i:], []byte("PRIVATE KEY"))
+			p.in = !bytes.Contains(line[i:], []byte("-----END "))
+			return true, private
+		}
 		if bytes.Contains(line, []byte("-----END ")) {
 			p.in = false
 		}
