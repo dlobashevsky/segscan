@@ -80,8 +80,11 @@ func loadSecConfig(top string) (*secConfig, error) {
 func parseSecConfig(data []byte, project string) (*secConfig, error) {
 	cfg := &secConfig{Project: project, Roots: []string{"nodes/*"}, SkipUUIDs: skipAll, Binary: "scan", HookScan: "warn"}
 	for no, l := range strings.Split(string(data), "\n") {
-		if i := strings.IndexByte(l, '#'); i == 0 || i > 0 && (l[i-1] == ' ' || l[i-1] == '\t') {
-			l = l[:i]
+		for i := 0; i < len(l); i++ {
+			if l[i] == '#' && (i == 0 || l[i-1] == ' ' || l[i-1] == '\t') {
+				l = l[:i]
+				break
+			}
 		}
 		l = strings.TrimSpace(l)
 		if l == "" {

@@ -161,6 +161,25 @@ func TestCLIConfigRepository(t *testing.T) {
 		t.Fatalf("first commit: exit %d\n%s", code, errs)
 	}
 
+	// The hook follows the staged .sec/config: hook_scan = block in the index
+	// blocks even if the working tree says off.
+	cfgText := r.read(".sec/config")
+	r.write(".sec/config", strings.Replace(cfgText, "hook_scan   = warn", "hook_scan   = block", 1))
+	r.must("git", "add", ".sec/config")
+	r.write(".sec/config", strings.Replace(cfgText, "hook_scan   = warn", "hook_scan   = off", 1))
+	r.write("nodes/n1/etc/nginx/y.conf", "secret 7hQmWvKx3NpZr9bTfYs2LcJd8GaEuV4o;\n")
+	r.must("segscan", "manifest", "fix")
+	r.must("git", "add", "nodes", ".sec/manifest")
+	if _, errs, code := r.run("segscan", "hook"); code != 1 || !strings.Contains(errs, "commit blocked") {
+		t.Errorf("hook followed the unstaged hook_scan = off: exit %d\n%s", code, errs)
+	}
+	r.write(".sec/config", cfgText)
+	r.must("git", "add", ".sec/config")
+	r.must("git", "rm", "-q", "--cached", "nodes/n1/etc/nginx/y.conf")
+	r.must("rm", "nodes/n1/etc/nginx/y.conf")
+	r.must("segscan", "manifest", "fix")
+	r.must("git", "add", ".sec/manifest")
+
 	// Every blocking check.
 	other := "3fa85f64-5717-4562-b3fc-2c963f66afa6"
 	r.write("nodes/n1/etc/telegraf/t.conf", "dsn = clickhouse://u:"+ph+"@h\nx = "+placeholderText("nope", other)+"\ny = !SECKEY_bad!\nz = "+
@@ -279,6 +298,26 @@ func TestCLIConfigRepository(t *testing.T) {
 	if _, errs, code := r.run("git", "push", "-q", "other", ":main"); code != 0 {
 		t.Errorf("pre-push blocked a deletion: exit %d\n%s", code, errs)
 	}
+	// A stale remote-tracking ref is not trusted: origin had the bad commits
+	// on a branch that was deleted on the server, but refs/remotes/origin/old
+	// is still here. Pushing them again under a new name must be checked.
+	r.must("git", "push", "-q", "--no-verify", "origin", "main:old")
+	r.must("git", "fetch", "-q", "origin")
+	r.must("git", "-C", remote, "branch", "-q", "-D", "old")
+	if _, errs, code := r.run("git", "push", "-q", "origin", "main:new"); code == 0 || !strings.Contains(errs, "problem(s)") {
+		t.Errorf("pre-push trusted a stale remote-tracking ref: exit %d\n%s", code, errs)
+	}
+	// What the destination advertises now does count as checked: after the
+	// bad commits are on origin (pushed with --no-verify), pushing a clean
+	// commit on top checks only that commit.
+	r.must("git", "push", "-q", "--no-verify", "origin", "main")
+	r.must("git", "checkout", "-q", "-b", "clean", "HEAD")
+	r.must("git", "rm", "-q", "nodes/n1/etc/telegraf/t.conf")
+	r.must("git", "commit", "-q", "--no-verify", "-m", "fix")
+	if _, errs, code := r.run("git", "push", "-q", "origin", "clean"); code != 0 {
+		t.Errorf("pre-push of a clean commit on advertised history: exit %d\n%s", code, errs)
+	}
+	r.must("git", "checkout", "-q", "main")
 
 	// key list and key rm.
 	list := r.must("segscan", "key", "list", "-no-header")

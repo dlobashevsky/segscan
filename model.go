@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -268,8 +269,12 @@ func loadModel(path string) (*Model, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return decodeModel(f, path)
+}
+
+func decodeModel(r io.Reader, path string) (*Model, error) {
 	m := &Model{}
-	if err := gob.NewDecoder(f).Decode(m); err != nil {
+	if err := gob.NewDecoder(r).Decode(m); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 	if m.Version != modelVersion {

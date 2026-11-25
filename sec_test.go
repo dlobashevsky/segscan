@@ -127,6 +127,10 @@ func TestParseSecConfig(t *testing.T) {
 		!reflect.DeepEqual(cfg.Roots, []string{"a/*", "b/*"}) || !reflect.DeepEqual(cfg.Forbid, []string{".htpasswd*", "*.key"}) {
 		t.Errorf("parsed: %+v", cfg)
 	}
+	cfg, err = parseSecConfig([]byte("keystore = vault#prod # local path\n"), "x")
+	if err != nil || cfg.Keystore != "vault#prod" {
+		t.Errorf("a # inside a value: %q %v", cfg.Keystore, err)
+	}
 	for _, bad := range []string{"nokey\n", "colour = red\n", "skip_uuids = some\n", "hook_scan = maybe\n", "forbid = [\n"} {
 		if _, err := parseSecConfig([]byte(bad), "x"); err == nil {
 			t.Errorf("accepted %q", bad)

@@ -34,16 +34,17 @@ exec segscan hook
 `
 
 const prePushHook = `#!/bin/sh
-# segscan: blocking checks of every pushed commit. $1 is the remote name, or
-# its URL when there is none; only that remote's refs are taken as checked.
+# segscan: blocking checks of every pushed commit. Commits are taken as
+# already checked only if the destination advertises them now (ls-remote):
+# local remote-tracking refs can be stale or belong to another remote. If
+# ls-remote fails, the whole ancestry is checked.
 command -v segscan >/dev/null 2>&1 || { echo "pre-push: segscan is not in PATH" >&2; exit 1; }
-remote=$1
+known=$(git ls-remote "$1" 2>/dev/null | while read -r oid ref; do
+	git cat-file -e "$oid^{commit}" 2>/dev/null && printf ' ^%s' "$oid"
+done)
 while read -r lref loid rref roid; do
 	case "$loid" in *[!0]*) ;; *) continue ;; esac   # a deleted ref
-	range="$loid"
-	git config --get "remote.$remote.url" >/dev/null 2>&1 && range="$loid --not --remotes=$remote"
-	case "$roid" in *[!0]*) git cat-file -e "$roid^{commit}" 2>/dev/null && range="$roid..$loid" ;; esac
-	segscan check -range "$range" || exit 1
+	segscan check -range "$loid$known" || exit 1
 done
 `
 

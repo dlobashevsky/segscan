@@ -70,8 +70,10 @@ type common struct {
 	skipUUIDs    bool
 	o            Opts
 
-	sec *secConfig // set by finish inside a .sec/ repository
-	set map[string]bool
+	sec       *secConfig // set by finish inside a .sec/ repository
+	top       string     // the repository top, with sec
+	set       map[string]bool
+	allowList *allowList // if set, runDiff uses it instead of loading c.allow
 }
 
 func flags(name string) (*flag.FlagSet, *common) {
@@ -109,7 +111,7 @@ func (c *common) finish(fs *flag.FlagSet) {
 	if err != nil {
 		die(err)
 	}
-	c.sec = cfg
+	c.sec, c.top = cfg, top
 	if !c.set["allow"] {
 		c.allow = secPath(top, "allow")
 	}
@@ -440,7 +442,10 @@ func cmdScan(args []string) {
 }
 
 func runDiff(c *common, m *Model, r io.Reader, uniq bool) int {
-	allow := loadAllow(c.allow, !c.noDef)
+	allow := c.allowList
+	if allow == nil {
+		allow = loadAllow(c.allow, !c.noDef)
+	}
 	p := c.printer(uniq)
 	s := &fileScan{sc: NewScanner(m, c.o), allow: allow, out: p.add}
 	last := ""
@@ -471,11 +476,53 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 	}
 }
 
+// fromIndex makes the hook follow the staged .sec/ files, not the working
+// tree: an unstaged edit of .sec/config (hook_scan = off), .sec/allow or the
+// model must not weaken the check of what is being committed. Flags given on
+// the command line still win. It returns the staged model, if there is one.
+func (c *common) fromIndex() *Model {
+	show := func(p string) ([]byte, bool) {
+		out, err := exec.Command("git", "-C", c.top, "show", ":"+secDir+"/"+p).Output()
+		return out, err == nil
+	}
+	data, _ := show("config")
+	cfg, err := parseSecConfig(data, filepath.Base(c.top))
+	if err != nil {
+		die(fmt.Errorf("staged %s/config: %v", secDir, err))
+	}
+	c.sec = cfg
+	if !c.set["skip-uuids"] {
+		c.o.Skip = cfg.SkipUUIDs
+	}
+	if !c.set["allow"] {
+		a := loadAllow("", !c.noDef)
+		if data, ok := show("allow"); ok {
+			a.add(data)
+		}
+		c.allowList = a
+	}
+	if c.set["m"] || os.Getenv("SEGSCAN_MODEL") != "" {
+		return nil
+	}
+	if data, ok := show("segscan.model"); ok {
+		m, err := decodeModel(bytes.NewReader(data), "staged "+secDir+"/segscan.model")
+		if err != nil {
+			die(err)
+		}
+		return m
+	}
+	return nil
+}
+
 func cmdHook(args []string) {
 	fs, c := flags("hook")
 	warn := fs.Bool("warn", false, "print the findings but do not block the commit")
 	fs.Parse(args)
 	c.finish(fs)
+	var staged *Model
+	if c.sec != nil {
+		staged = c.fromIndex()
+	}
 	block := !*warn
 	if !c.set["warn"] && c.sec != nil {
 		switch c.sec.HookScan {
@@ -487,6 +534,9 @@ func cmdHook(args []string) {
 	}
 	path := modelPath(c.model)
 	m, err := loadModel(path)
+	if staged != nil {
+		m, err = staged, nil
+	}
 	if os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "segscan: no model, training on git ls-files -> %s\n", path)
 		files, gerr := gitFiles()
