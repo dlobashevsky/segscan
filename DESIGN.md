@@ -49,7 +49,8 @@ exit codes.
 
 New flag for the scanner commands: `-skip-uuids` (also `--skip-uuids`, as the
 `flag` package accepts both). It is off by default and on by default inside a
-`.sec/` repository (`skip_uuids` in `.sec/config`). See 5.3 for what it skips.
+`.sec/` repository (`skip_uuids = all` in `.sec/config`). See 5.3 for what it
+skips.
 
 ## 3. Layout
 
@@ -108,7 +109,7 @@ separated by one TAB.
 project     = cluster
 keystore    = ~/.secshell/cluster
 roots       = nodes/*          # where a node tree starts: nodes/n1/etc/... -> /etc/...
-skip_uuids  = placeholders     # placeholders | all | off   (5.3)
+skip_uuids  = all              # all | placeholders | off   (5.3)
 binary      = scan             # scan | skip: binary files in check/hook (8)
 hook_scan   = warn             # warn | block | off: the statistical part of the hook
 forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never be committed
@@ -152,12 +153,19 @@ cost model.
 ```
 
 - `path`: repository path (`nodes/n1/etc/nginx/nginx.conf`). The target path
-  is the path minus the node root.
+  is the path minus the node root, with no other mapping. Files of containers
+  on a node are kept under the host path where they live
+  (`nodes/n1/srv/app/conf/...`), like any other file of the node.
+  Because the path includes the node, every entry is per node. Users and
+  groups differ between nodes, and the manifest of each node names its own.
 - `type`: `f` file, `d` directory, `l` symlink (the target is in git itself),
   `s` secret file taken from the keystore's `files/` (the repository holds no
   file at this path; see 7.2).
 - `mode`: octal, with setuid/setgid/sticky (`0640`, `2775`).
 - `owner`, `group`: names, not numbers, because ids differ between nodes.
+  `expand -install` and `manifest apply` resolve every name on the target
+  before writing anything. A name the target does not know is an error, and
+  nothing is changed.
 - `attr`: zero or more `k=v`:
   - `secret=<name>` for type `s`;
   - `acl=<text>` (getfacl short form, `,`-separated);
@@ -212,17 +220,17 @@ New transforms can be added later; an unknown one is an error.
 ### 5.3 What `-skip-uuids` skips
 
 The statistical scanner would report every placeholder, because 32 hex
-digits cost about 4.5-5 bits per char. With `-skip-uuids`:
+digits cost about 4.5-5 bits per char. `-skip-uuids` blanks a span before
+the line is scored, so the text around it is still scanned. Which spans:
 
-- `placeholders` (the default inside `.sec/`): every well-formed
-  `!SECKEY_..!` span is blanked before the line is scored, so the text around
-  it is still scanned.
-- `all`: also every bare canonical UUID. This lowers the noise further but
-  loses UUID-shaped secrets (Sensu and Proxmox API tokens, some client
-  secrets are UUIDs). It is opt-in for that reason.
+- `all` (the flag on the command line, and the default inside `.sec/`):
+  every well-formed `!SECKEY_..!` span and every bare canonical UUID.
+- `placeholders`: only the `!SECKEY_..!` spans.
 
-`-skip-uuids` on the command line means `all`. In `.sec/config`,
-`skip_uuids` can choose `placeholders`.
+`all` misses UUID-shaped secrets (Sensu and Proxmox API tokens, some client
+secrets are UUIDs) in the statistical scan. A known value of that shape is
+still caught by the exact match (check 6). Only an unknown one goes
+unreported.
 
 ## 6. Commands
 
@@ -242,7 +250,8 @@ exists). The existing `install` command is unchanged and writes
 
 ```
 key add <name> [-scope GLOB,...]    new name + uuid in names; prints the placeholder   (no keystore)
-key set <name> [-gen N]             value from stdin (no echo on a tty) or N random base58 chars   (keystore)
+key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen: N chars of base58
+                                    from crypto/rand (the house standard for our own keys)   (keystore)
 key rm  <name>                      from names; refuses while a placeholder still uses it
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
@@ -334,6 +343,8 @@ Blocking checks (exit 1):
    inside its scope.
 3. **Manifest.** Every file under a node root has a manifest entry, and every
    type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
+   Owner and group must not be empty. Whether they exist on the node is
+   checked on install (4.4).
 4. **Forbidden paths.** No staged path matches `forbid`, the keystore path or
    `.sec/keys`.
 5. **Private keys.** No `PRIVATE KEY` block (the existing detector).
@@ -351,6 +362,22 @@ Without the keystore, check 6 is skipped with a single line saying so.
 commit in the range (pre-push). `--all` checks every commit reachable from
 any ref; run it on the deploy machine from time to time, because commits
 made elsewhere skipped check 6.
+
+`--all` keeps its state in the keystore directory (`check.state`, mode 0600),
+because only the deploy machine runs check 6. The state holds:
+
+- the ref tips already checked;
+- for every key, a digest of name, uuid and value: HMAC-SHA256 with a random
+  per-keystore salt kept in the same file, so the state does not help to
+  guess a value.
+
+On the next run:
+
+- commits not reachable from the stored tips are checked with every key;
+- a key that is new or whose digest changed is checked against the whole
+  history.
+
+`--all -full` ignores the state.
 
 ### 6.6 Statistical scanner in a `.sec/` repository
 
@@ -475,7 +502,9 @@ and tests intact.
 1. **This document.**
 2. **Without the keystore:**
    - `.sec/config`, the placeholder parser and `-skip-uuids`;
-   - `init`, `key add|rm|list`, `manifest fix`;
+   - `init`, `key add|rm|list`, `manifest fix` (a new file takes owner,
+     group and mode from the nearest parent directory entry of the same
+     node, or `root:root 0600` if there is none, and is listed for review);
    - `check` checks 1-5, `hook -warn`;
    - `.sec/` defaults for `scan`/`hook`/`train`.
 3. **Keystore and transforms:**
@@ -486,14 +515,13 @@ and tests intact.
    writes and attributes, type `s`.
 5. **Rest:** `drift`, binary scanning (8), `keys sync`, pre-push hook.
 
-## 12. Open questions
+## 12. Decisions
 
-1. `skip_uuids` default inside `.sec/`: `placeholders` (proposed) or `all`?
-2. `roots = nodes/*` maps `nodes/<node>/<path>` to `/<path>`. Do some nodes
-   need a different mapping (containers, chroots)?
-3. Owner and group by name: is the same user/group present on every node, or
-   does the manifest need per-node overrides?
-4. `key set -gen`: base58 by default. Is that fine for every consumer
-   (ClickHouse, nginx headers, MySQL)?
-5. Should `check --all` keep a record of the last checked commit, so the
-   deploy machine checks only new history?
+1. `skip_uuids` defaults to `all` inside `.sec/` (5.3).
+2. No path mapping besides removing the node root. Container files are
+   kept under their host paths (4.4).
+3. Users and groups differ between nodes. Manifest entries are per node, and
+   names are resolved on the target (4.4).
+4. Our own keys are always base58 from a random source (`key set -gen`).
+   Values set by external tools may be anything (4.3).
+5. `check --all` keeps incremental state in the keystore (6.5).
