@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"os/user"
 	"path"
 	"path/filepath"
 	"strings"
@@ -168,13 +169,27 @@ func checkKeystorePath(p string) error {
 	return nil
 }
 
+// invokerHome is ~ of the user segscan works for: under sudo the caller's
+// home from the password database, not root's or an inherited $HOME.
+func invokerHome() string {
+	if os.Geteuid() == 0 {
+		if id := os.Getenv("SUDO_UID"); id != "" {
+			if u, err := user.LookupId(id); err == nil {
+				return u.HomeDir
+			}
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
 func (c *secConfig) keystoreDir() string {
 	p := c.Keystore
 	if e := os.Getenv("SEGSCAN_KEYSTORE"); e != "" {
 		p = e
 	}
 	if rest, ok := strings.CutPrefix(p, "~/"); ok {
-		if home, err := os.UserHomeDir(); err == nil {
+		if home := invokerHome(); home != "" {
 			p = home + string(filepath.Separator) + rest // no Clean: see canonical
 		}
 	}

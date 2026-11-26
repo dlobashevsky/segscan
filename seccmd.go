@@ -196,7 +196,7 @@ func keyUses(top string) map[string]map[string]int {
 		die(err)
 	}
 	uses := map[string]map[string]int{}
-	ck := &checker{top: top, cache: map[string]*fileInfo{}}
+	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
 	for _, f := range s.Files {
 		if f.Link || f.Gitlink || strings.HasPrefix(f.Path, secDir+"/") {
 			continue
@@ -216,6 +216,9 @@ const keyUsage = `usage:
                                              add a key name and print its placeholder
   segscan key rm <name>                      remove a key that no placeholder uses
   segscan key list                           keys, scopes and where they are used
+  segscan key set <name> [-gen N]            set the value: from stdin, or N random base58 chars   (keystore)
+  segscan key check [-weak]                  names <-> keystore: missing, unknown, mismatched   (keystore)
+  segscan key retire [-secret] <name>        retire a value no name uses any more; still searched   (keystore)
 `
 
 func cmdKey(args []string) {
@@ -230,8 +233,14 @@ func cmdKey(args []string) {
 		keyRm(args[1:])
 	case "list":
 		keyList(args[1:])
-	case "set", "check":
-		die(fmt.Errorf("key %s needs the keystore, which is not implemented yet", args[0]))
+	case "set":
+		keySet(args[1:])
+	case "check":
+		keyCheck(args[1:])
+	case "retire":
+		keyRetire(args[1:])
+	case "forget":
+		die(fmt.Errorf("key forget is not implemented yet: it needs the state of check -all (DESIGN.md 4.3)"))
 	default:
 		fmt.Fprint(os.Stderr, keyUsage)
 		os.Exit(2)

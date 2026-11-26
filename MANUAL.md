@@ -21,25 +21,32 @@ segscan has two jobs:
 The hooks call `segscan` from `$PATH`; every machine that commits to a
 configuration repository needs it there.
 
+The keystore and the commands that need it (`key set/check/retire`,
+`import`, `expand`, check 6) are Linux only. Elsewhere (macOS, a planning
+laptop) everything else works, and `check` runs without check 6.
+
 ## 2. Status
 
 | Part | State |
 |---|---|
 | Statistical scan: `scan`, `diff`, `hook`, `train`, `calib`, `explain` | works |
 | `.sec/` repositories: `init`, `key add/rm/list`, `manifest fix`, `check` checks 1-5, hooks | works |
-| Keystore, `key set/check`, `import`, `expand`, known-value check (check 6) | not yet (stage 3) |
+| Keystore, `key set/check/retire`, `import`, `expand -to`, known-value check (check 6), `train` guard | works |
+| `check -all` state (incremental runs), `key forget` | not yet: `-all` always checks the whole history |
 | `manifest pull/check/apply`, `expand -install` with owners and modes | not yet (stage 4) |
 | Binary files in the statistical scan, `drift`, `keys sync` | not yet (stage 5) |
 
-What this means in practice today: the repository can hold placeholders
-instead of values, and nothing that violates the rules gets committed or
-pushed. Putting the values back for deployment (`expand`) is not there yet;
-until it is, deploy the files that hold placeholders by hand, or keep
-those files out of the deployment.
+What this means in practice: the repository holds placeholders instead of
+values, nothing that breaks the rules gets committed or pushed, and on the
+deploy machine (the one with the keystore) `expand -to` writes the real
+files into a staging directory, from which your deploy tool copies them.
+Owners and modes on the node are still your deploy tool's job; the manifest
+records them already.
 
-`check` says so on every run:
+Without the keystore (a laptop that only plans changes), `check` says once
+per run that check 6 was skipped:
 
-    segscan: known values not checked: keystore support is not implemented yet
+    segscan: known values not checked: no keystore at /home/me/.secshell/cluster
 
 ## 3. Quick start: a configuration repository
 
@@ -83,6 +90,22 @@ commit the model, so everyone's hook uses the same one:
     segscan train          # writes .sec/segscan.model
     git add .sec/segscan.model && git commit -m 'segscan model'
 
+On the deploy machine, give the keys their values and build the files of a
+node:
+
+    segscan key check                      # which values are missing
+    segscan key set ch_sts                 # type it, or: key set ch_sts -gen 32
+    segscan check -all                     # also searches the known values now
+    segscan expand -node n1 -to /srv/stage/n1
+
+Then your deploy tool copies the files from the staging tree and sets
+owner, group and mode from `.sec/manifest`. Do not `rsync -a` the staging
+tree onto `/` as it is: every file there is `0600` and every directory
+`0700`, and `rsync -a` would give `/etc` those modes.
+
+A change made on a node by hand comes back with
+`sudo segscan import -node n1 /etc/...` (section 9).
+
 ## 4. The `.sec/` directory
 
 | File | Contents |
@@ -92,7 +115,7 @@ commit the model, so everyone's hook uses the same one:
 | `manifest` | type, mode, owner, group of every file under a node root (section 7) |
 | `allow` | allowlist of the statistical scan: fingerprints and `path:glob` |
 | `segscan.model` | the trained model (optional, from `segscan train`) |
-| `hooks/pre-commit`, `hooks/pre-push` | the hooks (section 9) |
+| `hooks/pre-commit`, `hooks/pre-push` | the hooks (section 12) |
 | `.gitignore` | ignores `.sec/keys`, an optional link to the keystore |
 
 `.sec/` must be a real directory, and `config`, `names`, `manifest` and
@@ -146,8 +169,11 @@ Example, a password inside a URL in an nginx config:
 
     proxy_pass http://play:!SECKEY_web_play_4ffa...:urlenc!@127.0.0.1:8123;
 
-Today the transforms are only checked for spelling; they take effect with
-`expand` (stage 3).
+A placeholder of a key that is a `user:password` pair in
+`Authorization: Basic`: make the whole `user:password` the key's value and
+use `:b64`. segscan cannot see a value inside a base64 of a longer string.
+
+Every form a chain produces is at most 64 KiB.
 
 ## 6. `.sec/config`
 
@@ -162,10 +188,10 @@ Today the transforms are only checked for spelling; they take effect with
 | Key | Meaning |
 |---|---|
 | `project` | name, default the directory name |
-| `keystore` | where the values will live (stage 3). Must be outside the repository and contain no `.` or `..` components; `check` reports a keystore inside the repository and forbids its path |
+| `keystore` | where the values live (section 8). `$SEGSCAN_KEYSTORE` overrides it. Must be outside the repository and contain no `.` or `..` components; `check` reports a keystore inside the repository and forbids its path |
 | `roots` | globs of node roots; `nodes/n1/etc/x` is `/etc/x` on node `n1` |
 | `skip_uuids` | `all` (placeholders and bare UUIDs are not scored by the statistical scan), `placeholders`, `off` |
-| `binary` | `scan` or `skip`; binary scanning itself comes in stage 5 |
+| `binary` | `scan` or `skip`, for the statistical scan (stage 5); check 6 always reads binary files |
 | `hook_scan` | the statistical part of the pre-commit hook: `warn` (print, do not block), `block`, `off` |
 | `forbid` | globs of paths that may never be committed |
 
@@ -203,7 +229,126 @@ a directory once gives sane defaults to everything added below it:
 
     nodes/n1/etc/nginx	d	2750	root	www-data
 
-## 8. `segscan check`
+## 8. The keystore
+
+The values live outside the repository, on the deploy machine only:
+
+    ~/.secshell/<project>/      (keystore in .sec/config, or $SEGSCAN_KEYSTORE)
+      keys                      name<TAB>uuid<TAB>value
+      retired                   values replaced by key set or key retire, still searched
+      files/<name>              secret files: .htpasswd, .env, PEM keys
+      retired-files/            replaced secret files, still searched
+
+- The directory must be mode `0700` and owned by you, every file `0600`
+  with one link, owned by you or root; segscan refuses anything else, like
+  ssh. Under `sudo`, "you" is `$SUDO_UID`, and `~` is that user's home.
+  Files segscan writes under sudo are given to that user.
+- segscan opens it component by component and never follows a symlink,
+  neither to the keystore nor inside it. A link `.sec/keys -> ~/.secshell/x`
+  for convenience is fine (`.sec/.gitignore` ignores it), but the keystore
+  path in the config must be the real one.
+- A value is printable ASCII without spaces, quotes (`" ' \``), backslash
+  and `#`. Anything else (a multi-line or binary secret) is a secret file.
+- Commands that change it hold an exclusive lock, readers a shared one. A
+  rotation goes through a journal (`pending`), so a crash never loses the
+  old value; the next command finishes it.
+
+Back it up like ssh keys. Two deploy machines: copy it with the modes kept
+(`keys sync` is stage 5).
+
+### 8.1 Values
+
+    segscan key set <name>            # the value from stdin, no echo on a terminal
+    segscan key set <name> -gen 32    # 32 random base58 characters (our own keys)
+    segscan key check [-weak]
+    segscan key retire <name>         # after key rm: the value stays searchable
+    segscan key retire -secret <name> # a secret file no type s entry names any more
+
+- `key set` needs the name in `.sec/names` and takes its uuid from there. A
+  `-base58` key accepts only base58. Two keys with the same value are
+  refused. The value replaced goes to `retired`.
+- `key check` compares `.sec/names` with the keystore and lists, as TSV
+  `kind name problem`: keys without a value, values without a name, uuid
+  mismatches (another project's keystore), secret files without a type `s`
+  entry and type `s` entries without a file. Exit 1 if there is any.
+- A line of `keys` whose value is outside the allowed characters (edited
+  by hand) is listed by `key check`; check 6 still searches it, `expand`
+  treats the key as having no value, and `key set` retires it.
+- `key check -weak` also lists keys whose value has weak forms (below):
+  check 6 does not search those forms, so these values are only partly
+  protected. Weak or default passwords as such are not segscan's job; use a
+  dictionary or a leak scanner before deployment.
+- There is no `key forget` yet: retired values stay searched forever.
+
+Rotation: `key set <name>` (the placeholders in the repository stay the
+same), `expand`, deploy, restart the services. The old value keeps being
+searched by `check`.
+
+## 9. `segscan import`: from a node into the repository
+
+    sudo segscan import [-n] -node n1 /etc/clickhouse-server/users.xml /etc/nginx/nginx.conf
+    sudo segscan import -node n1 -secret htpasswd /etc/nginx/.htpasswd
+
+`import` copies each live file to `nodes/<node>/<path>`, replaces every
+value of every key by its placeholder, and records type, mode, owner and
+group in the manifest. `-n` prints what it would do. Run it from the
+checkout; it does not run git, so it is safe under `sudo`. It reads the
+live file without following symlinks on the way; a symlink is imported as
+a symlink (type `l`). A new node directory (`nodes/n9`) is created. Directories are not walked: give the files
+(`$(find /etc/nginx -type f)`).
+
+It searches each value in its bare form, under every transform and every
+pair of transforms (and longer chains the repository uses), and writes the
+placeholder with the matching transforms. It stops and writes **nothing**,
+for all files given, when:
+
+| Problem | What to do |
+|---|---|
+| a value outside the key's `-scope` | widen the scope, or it really is a leak |
+| the forms of two keys overlap (`abc` and `abcdef`) | write that placeholder by hand |
+| one text fits several transforms (an alphanumeric value is the same bare, `urlenc`ed and `xml`-escaped) | `-form FILE:LINE=urlenc` (or `=bare`), or write the placeholder by hand; the next import keeps it |
+| a short or common value (`on`, `admin`): it would replace ordinary text too | check the listed places, then `-accept <name>`; or narrow the scope |
+| a value left after replacement (a retired value, a line of a secret file) | it is a leak; remove it on the node |
+| a binary file with a value in it, or one that cannot be fully read | `-secret <name>`, or `path:<glob>` in `.sec/allow` for a harmless binary |
+| the result does not expand back to the live file byte for byte | write the placeholders by hand |
+
+For a `-base58` key the choice of transform is never ambiguous for escapes,
+so mark our own keys `-base58`. A short value counts only as a whole token
+(no letter, digit, `_` or `-` next to it) and only inside the scope.
+
+`-secret <name>` stores the file in the keystore (`files/<name>`) and adds a
+type `s` entry; the file never enters the tree. Use it for `.htpasswd`
+(salted hashes cannot be placeholders), `.env` files, PEM keys. A PKCS#12
+bundle deployed by hand can live in `files/` too: check 6 keeps searching
+for it.
+
+It prints, per file, the keys replaced and how often, and the number of
+statistical findings left (`-v` shows them).
+
+## 10. `segscan expand -to`: from the repository to a node
+
+    segscan expand -node n1 -to /srv/stage/n1 [/etc/nginx ...]
+    segscan expand -n -node n1 -to /srv/stage/n1
+
+`expand` writes every manifest entry of the node under the staging
+directory at its host path, with every placeholder resolved: type `f` with
+the values, type `s` from `files/`, type `l` as symlinks, type `d` as
+directories. Files are `0600`, directories `0700`; the real owners and modes
+are in `.sec/manifest` for your deploy tool (`expand -install`, which sets
+them, is stage 4). Paths after the flags select a part of the node.
+
+- Every problem is collected first (missing value, uuid mismatch, malformed
+  placeholder, a transform that cannot represent the value, two entries on
+  the same target) and reported together; then nothing is written.
+- The staging directory must be outside the repository, and no symlink
+  under it is followed. Entries below a declared symlink (type `l`) land
+  where the link points on the node.
+- A file that is already right is not touched. The changed paths are
+  printed, never the values. `-n` only lists them.
+- It reads the repository without following symlinks and refuses a type `f`
+  file with several hard links.
+
+## 11. `segscan check`
 
     segscan check                 # the working tree
     segscan check -staged         # the index (what the next commit holds)
@@ -212,7 +357,9 @@ a directory once gives sane defaults to everything added below it:
     -json, -no-header
 
 Each snapshot (the working tree, the index, a commit) is checked with its
-own `.sec/` files. A problem found in many commits is reported once, at the
+own `.sec/` files. With the keystore available, check 6 runs too; the
+pre-commit hook on the deploy machine runs it on every commit, and
+`check -all` there finds values committed elsewhere. A problem found in many commits is reported once, at the
 oldest one. Commits from before `.sec/` existed get only the grammar,
 forbidden-path and private-key checks.
 
@@ -227,6 +374,39 @@ code 0 clean, 1 problems, 2 error.
 | `forbidden` | a path that matches `forbid`, `.sec/keys`, or lies in the keystore | remove the file |
 | `private_key` | a `-----BEGIN ... PRIVATE KEY-----` block, also in binary files and in `.sec/` | remove the key; a deliberate test key goes into `.sec/allow` by fp |
 | `config` | an invalid `.sec/config`; a `.sec/` file that is not a regular file; `.sec` not a directory; a keystore inside the repository | fix the file |
+| `known_value` | check 6, only with the keystore: a value of a key (current or retired) or of a secret file is in the file, in some form; or a binary file could not be read completely | remove the value and rotate it if it was pushed; a harmless binary goes into `.sec/allow` as `path:<glob>` |
+
+Check 6 in detail:
+
+- It searches every **strong** form of every value: bare, under each
+  transform and pair of transforms, and longer chains used in the
+  repository. A form shorter than 8 bytes or one that looks like ordinary
+  text (a word, a version, a path) is weak and not searched: `0` is in every
+  `0600`. The strong forms of a weak value, such as its `sha256`, are still
+  searched (`key check -weak` lists the weak ones).
+- Scopes do not matter here: a strong form is a finding under any path,
+  `.sec/` included.
+- Secret files: their whole content, each line (trimmed of spaces) and the
+  value of each `name=value` line, with and without one pair of quotes,
+  each in all its strong forms. So `TOKEN=Zx81...` from `app.env` is found
+  under another name too.
+- Binary files (not valid UTF-8, or a NUL anywhere): the raw bytes, also in
+  UTF-16LE/BE, plus what gzip members (also behind a text prefix, as in a
+  self-extracting script) and ZIP archives hold, two levels deep, 64 MiB at
+  most. Any other binary (PNG, PDF, tar, ...) is reported as "not fully
+  scanned" until `.sec/allow` has `path:<glob>` for it; the raw bytes are
+  still searched. One unreadable member of a ZIP (a `.class` in a JAR)
+  does not stop the search of the others. `.sec/segscan.model` is read in
+  full.
+- Symlink targets are searched too.
+- A binary secret file (a PKCS#12 bundle) is searched by its whole content
+  only; one larger than 64 KiB only bare and under single transforms, so
+  even a large one costs little on every hook.
+- Commits from before `.sec/` existed are still searched for known values
+  (a repository you take over carries its old leaks there), but their
+  binary files are not reported as "not fully scanned": an allowlist can no
+  longer be added to such a commit.
+- The message names the key or secret file and the form, never the value.
 
 Example:
 
@@ -234,7 +414,7 @@ Example:
             nodes/n1/etc/nginx/nginx.conf  3    1   names  key ch_sts used outside its scope
             nodes/n1/etc/nginx/nginx.conf  4    1   names  unknown key nope (segscan key add)
 
-## 9. Hooks
+## 12. Hooks
 
 `init` points `core.hooksPath` at `.sec/hooks`:
 
@@ -261,7 +441,7 @@ The old `segscan install` (a single `.git/hooks/pre-commit`) still works for
 repositories without `.sec/`; with `core.hooksPath` set, git ignores
 `.git/hooks`.
 
-## 10. The statistical scan in a `.sec/` repository
+## 13. The statistical scan in a `.sec/` repository
 
 `scan`, `diff`, `hook`, `train`, `calib` and `explain` use
 `.sec/segscan.model` and `.sec/allow` by default (`-m`, `-allow` and
@@ -275,13 +455,17 @@ False positives:
 - `path:<glob>` in `.sec/allow` skips files;
 - `segscan:allow` on a line skips that line.
 
+`segscan train` with the keystore available first runs check 6 on its
+input and stops on any finding, so a value never becomes a dictionary word
+of the model.
+
 Useful one-offs on a repository you take over:
 
     segscan scan | sort -t$'\t' -k5,5nr | head -50    # most random first
     git log -p --all -U0 | segscan diff                # the whole history
     segscan check -all                                 # rules over the whole history
 
-## 11. Taking over an existing repository
+## 14. Taking over an existing repository
 
 Credentials that are already in the history stay there; placeholders only
 protect what comes next. The safe order:
@@ -292,14 +476,19 @@ protect what comes next. The safe order:
 2. Rotate those credentials. A value that was ever pushed is not secret any
    more.
 3. Start a new repository (or rewrite the history, which does not remove
-   copies already fetched elsewhere), `segscan init`, and bring the files
-   over with placeholders in place of the values.
-4. `segscan check -all` before the first push.
+   copies already fetched elsewhere), `segscan init`, `key add` every
+   credential (`-base58` for our own), `key set` the new values on the
+   deploy machine, and bring the files in with `sudo segscan import` from
+   the nodes, or by hand with placeholders.
+4. Put the old, rotated values into the keystore too, as retired values
+   (`key set` the old value first, then the new one), so check 6 keeps
+   them out of the new repository.
+5. `segscan check -all` before the first push.
 
-## 12. Exit codes
+## 15. Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | clean |
-| 1 | findings (`scan`, `diff`, `hook`) or problems (`check`) |
-| 2 | error: bad arguments, invalid `.sec/` files where they are needed, a refused `key rm`, git failures |
+| 1 | findings (`scan`, `diff`, `hook`) or problems (`check`, `key check`, `import`, `expand`); `import` and `expand` wrote nothing |
+| 2 | error: bad arguments, invalid `.sec/` files where they are needed, a refused `key rm` or `key set`, a missing or untrusted keystore, git failures |

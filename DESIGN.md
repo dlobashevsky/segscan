@@ -1052,9 +1052,12 @@ and tests intact.
    - `check` checks 1-5, `hook -warn`, the pre-commit and pre-push hooks;
    - `.sec/` defaults for `scan`/`hook`/`train`.
 3. **Keystore and transforms:**
-   - the keystore reader with mode checks, `key set|check`;
+   - the keystore reader with mode checks, `key set|check|retire`;
    - `expand -to`, `import -n` and `import` with the round trip;
    - `check` check 6, the `train` guard.
+   - Left for later: `check.state` (so `-all` always checks the whole
+     history, and check 6 takes chains of three or four from the checked
+     snapshots and `HEAD` only) and `key forget`, which needs that state.
 4. **Attributes:** `manifest pull|check|apply`, `expand -install` with atomic
    writes and attributes, type `s`.
 5. **Rest:** `drift`, binary scanning (8), `keys sync`.
@@ -1090,3 +1093,40 @@ and tests intact.
    read (8), each of which is either fixed or allowlisted on purpose.
    Secret-file values are searched as written and unquoted, without
    escaping rules.
+10. Details fixed while building stage 3:
+    - "Cheap under the cost model" (4.3, 6.3, 6.5) means: fewer than 4
+      distinct bytes, or the statistical scanner with the built-in model
+      and default thresholds finds nothing random in the form. The
+      built-in model, not the repository's, so the set of searched forms
+      changes only with a segscan release.
+    - `import` drops, for the choice of transform (6.3 step 3), chains with
+      a step that cannot change any input it can get: an escape of hex,
+      base58 or base64url, and `dq`, `sq`, `nginxq` of a keystore value,
+      which has no quote, backslash or control byte. Of the chains left it
+      takes the shortest, counting the bare value as one step, so bare,
+      `urlenc` and `xml` of an alphanumeric value stay an ambiguity, while
+      `sha256` and `sha256:urlenc` do not. `-form FILE:LINE=T` takes the
+      live path or the repository path; it applies to every ambiguous
+      occurrence on that line.
+    - `import` takes files and symlinks, not directories; `-secret` takes
+      exactly one path. It finds the repository by walking up to `.git`
+      instead of running git, which under sudo would refuse a checkout
+      owned by someone else or run its configuration as root.
+    - A reader that finds `pending` under its shared lock uses the
+      journal's contents, which hold the replaced value in `retired`; the
+      journal holds `keys` and `retired` whole, so applying it twice is
+      harmless.
+    - Check 6 still runs on commits from before `.sec/` (6.5 lists only
+      grammar, forbidden paths and private keys for them): the known values
+      are exactly what a repository taken over carries in its old history.
+      Only the "not fully scanned" finding is left out there, since no
+      `.sec/allow` can be added to such a commit.
+    - Patterns of a binary secret file are its whole content only, no lines
+      or values; a whole content over 64 KiB gets the bare form and single
+      transforms only, so a large PKCS#12 bundle stays cheap for every hook
+      (5.1 asks for this without a streaming matcher). A binary form of 64
+      bytes or more and any form of 4 KiB or more is strong without asking
+      the scanner.
+    - Symlink targets are searched like file content. A `keys` line whose
+      value is outside the alphabet is reported by `key check`, searched by
+      check 6, unusable for `expand`, and retired by the next `key set`.
