@@ -103,9 +103,10 @@ root, so no keystore file is ever opened by path, for reading or writing:
   `check.key`) and `files/` and `retired-files/` are opened from that
   descriptor with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`
   (otherwise `openat(O_NOFOLLOW)`), and checked with `fstat` on the opened
-  descriptor: a regular file (or directory), owner and mode as above, and
-  one link, so neither a symlink nor a hard link to a file of root's is
-  followed. Only then is it read, or written;
+  descriptor: a regular file (or directory), owner and mode as above, and,
+  for a regular file, one link, so neither a symlink nor a hard link to a
+  file of root's is followed (a directory always has two or more links and
+  gets the other checks only). Only then is it read, or written;
 - a file that is replaced is written to a new temporary name created with
   `O_EXCL` in the same directory descriptor and moved with `renameat`,
   which replaces the directory entry and never writes through it. The one
@@ -138,9 +139,11 @@ searchable on the destination, and the next run finishes or redoes it.
 
 ## 4. File formats
 
-All files are UTF-8 text with LF line ends, with one exception: the value
-field of the keystore's `keys` and `retired` is any bytes except LF (4.3);
-their names, uuids and dates are UTF-8 like everything else. `#` at the start of a line begins
+All files are UTF-8 text with LF line ends, with two exceptions: the value
+field of the keystore's `keys` and `retired` is any bytes except LF (4.3),
+while their names, uuids and dates are UTF-8 like everything else; and the
+secret files in `files/` and `retired-files/` are opaque bytes, binary
+included (a PKCS#12 bundle), with no format at all. `#` at the start of a line begins
 a comment and blank lines are ignored, except in `keys` (see 4.3). Fields are
 separated by one TAB. In `.sec/config` only, a `#` after a space or TAB also
 starts a comment, so a value cannot contain ` #`.
