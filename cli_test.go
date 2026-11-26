@@ -564,3 +564,19 @@ func TestCLISecNotADirectory(t *testing.T) {
 		t.Errorf("staged gitlink .sec: exit %d\n%s", code, out)
 	}
 }
+
+// manifest fix drops only f and l entries whose file is gone: d and s entries
+// describe the target and have no file in the tree.
+func TestCLIManifestFixKeepsTargetEntries(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	r.write(".sec/manifest", manifestHeader+
+		"nodes/n1/etc/gone.conf\tf\t0644\troot\troot\n"+
+		"nodes/n1/etc/htpasswd\ts\t0640\troot\twww-data\tsecret=htpasswd\n"+
+		"nodes/n1/var/log/app\td\t0750\tapp\tadm\n")
+	_, errs, _ := r.run("segscan", "manifest", "fix")
+	m := r.read(".sec/manifest")
+	if strings.Contains(m, "gone.conf") || !strings.Contains(m, "nodes/n1/etc/htpasswd\ts") || !strings.Contains(m, "nodes/n1/var/log/app\td") {
+		t.Errorf("manifest after fix:\n%s\n%s", m, errs)
+	}
+}

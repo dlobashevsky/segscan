@@ -424,12 +424,11 @@ func manifestFix(args []string) {
 	keep := entries[:0]
 	for _, e := range entries {
 		gone := false
-		switch e.Type {
-		case "f", "l":
+		// Only f and l entries need a file in the tree. d and s entries
+		// describe the target: git keeps no empty directory, and a secret
+		// file is never in the tree, so they are removed by hand only.
+		if e.Type == "f" || e.Type == "l" {
 			gone = !present[e.Path]
-		case "d":
-			st, err := os.Stat(filepath.Join(top, e.Path))
-			gone = !present[e.Path] && (err != nil || !st.IsDir())
 		}
 		if gone {
 			removed++
