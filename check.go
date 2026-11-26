@@ -378,10 +378,16 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	//    symlink elsewhere in the working tree);
 	//  - real: a path that reaches the repository through a symlink alias is
 	//    still inside it.
+	//  - lexical below an alias: once a prefix of an absolute path is the
+	//    repository (literally or through a symlink), the rest names a place
+	//    in it, whatever the working tree has there now.
 	var rels []string
 	if !filepath.IsAbs(ks) {
 		rels = append(rels, filepath.Clean(ks))
 		ks = filepath.Join(ck.top, ks)
+	}
+	if rel, ok := relBelowTop(canonical(ck.top), ks); ok {
+		rels = append(rels, rel)
 	}
 	if rel, err := filepath.Rel(canonical(ck.top), canonical(ks)); err == nil {
 		rels = append(rels, rel)
@@ -479,6 +485,24 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 
 // canonical resolves symlinks in p. For a path that does not exist (yet),
 // the longest existing prefix is resolved and the rest appended.
+// relBelowTop finds the shortest prefix of the absolute path p that is the
+// repository top (top is canonical) and returns the rest of p as written,
+// without resolving it.
+func relBelowTop(top, p string) (string, bool) {
+	p = filepath.Clean(p)
+	parts := strings.Split(strings.TrimPrefix(p, string(filepath.Separator)), string(filepath.Separator))
+	prefix := string(filepath.Separator)
+	for i := 0; i <= len(parts); i++ {
+		if prefix == top || canonical(prefix) == top {
+			return filepath.Join(append([]string{"."}, parts[i:]...)...), true
+		}
+		if i < len(parts) {
+			prefix = filepath.Join(prefix, parts[i])
+		}
+	}
+	return "", false
+}
+
 func canonical(p string) string {
 	p = filepath.Clean(p)
 	rest := ""

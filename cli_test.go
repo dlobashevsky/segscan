@@ -408,6 +408,20 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 	}
 	r.must("rm", "vault")
 	r.must("git", "rm", "-q", "--cached", "vault/keys")
+	// The same for an absolute keystore path below the repository, written
+	// directly and through the alias.
+	for _, ks := range []string{filepath.Join(r.dir, "vault"), filepath.Join(alias, "vault")} {
+		r.write(".sec/config", "keystore = "+ks+"\n")
+		r.write("vault/keys", "x\n")
+		r.must("git", "add", "-A")
+		r.must("rm", "-r", "vault")
+		r.must("ln", "-s", t.TempDir(), "vault")
+		if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "vault/keys\t0\t0\tforbidden") {
+			t.Errorf("absolute keystore %s replaced by a symlink in the working tree: exit %d\n%s", ks, code, out)
+		}
+		r.must("rm", "vault")
+		r.must("git", "rm", "-q", "--cached", "vault/keys")
+	}
 	// The keystore cannot be the repository itself.
 	r.write(".sec/config", "keystore = .\n")
 	r.must("git", "add", "-A")

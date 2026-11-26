@@ -168,6 +168,7 @@ func parseManifest(data []byte) ([]*mEntry, []lineProblem) {
 			check(has && k != "", "%s: bad attribute %q", e.Path, a)
 			switch k {
 			case "secret":
+				check(e.Type == "s", "%s: secret= is only for type s", e.Path)
 				secret = v
 			case "scope":
 				check(e.Type == "s", "%s: scope= is only for type s", e.Path)
