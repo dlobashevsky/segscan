@@ -756,9 +756,14 @@ given in brackets:
    - so is a file that contains the value part of a `name=value` line of
      one, so `TOKEN=Zx81...` is found under another name. The value is
      taken both as written and as the shell and dotenv conventions read it:
+     an inline comment outside quotes (` # ...`) cut off first, then
      surrounding `"..."` or `'...'` removed, and inside double quotes the
-     escapes `\"`, `\\`, `\$` and `\n` undone, so `TOKEN="Zx81..."` is
-     also found as the bare `Zx81...` copied elsewhere.
+     escapes `\"`, `\\`, `\$` and `\n` undone, so `TOKEN="Zx81..." # prod`
+     is also found as the bare `Zx81...` copied elsewhere.
+
+   An empty pattern (an empty or blank line, `OPTIONAL=`, `X=""`) is dropped
+   before any transform: it holds no secret, and its forms (`sha256("")`)
+   are well-known constants that would match unrelated files.
 
    Each of these patterns is searched only in its strong forms (below), so
    `}`, `[main]`, `PORT=8080` or `DEBUG=true` match nothing by themselves.
@@ -950,9 +955,14 @@ text.
     (`/Encrypt`), or a stream with any other filter that is not an image
     codec, is "not fully scanned" (below); image codecs (`DCTDecode`,
     `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`) hold pixels, not text, and
-    their raw bytes are still searched as they are;
+    their raw bytes are still searched as they are. A ZIP is recognized by
+    its end-of-central-directory record, not by `PK` at offset 0, so a ZIP
+    behind a prefix (a self-extracting executable, a JAR with a launcher
+    script) is unpacked too;
   - a file in another common compressed or archive format that segscan does
-    not unpack (xz, zstd, bzip2, 7z, rar, recognized by its magic bytes) is
+    not unpack (xz, zstd, bzip2, 7z, rar, recognized by its magic bytes,
+    also when they follow an executable prefix as in a self-extracting
+    archive) is
     a blocking `known_value` finding, "not fully scanned", in check 6, as
     for a failed unpack (below), so an archive cannot hide a known value
     just by using an unsupported format. A file that must stay goes into
@@ -994,6 +1004,16 @@ be stale after a branch was deleted or rewritten on the server, or belong to
 another remote. When `ls-remote` fails, nothing is excluded and the whole
 ancestry is checked. A deleted ref (an all-zero local id) has nothing to
 check and is skipped.
+
+Excluding what the destination already has is right for checks 1-5, which
+every machine runs the same way. It is not enough for check 6: a commit a
+collaborator without the keystore pushed to a feature branch is advertised
+by the destination, yet no one has searched it for known values. So on a
+machine with the keystore, pre-push excludes only the tips that
+`check.state` records as checked by a complete `check --all` (6.5), and
+every other pushed commit, advertised or not, gets check 6. That is fast
+feedback only; the guarantee stays with `check --all`, which searches every
+commit reachable from any local ref, the pushed ones included.
 
 Both expect `segscan` in `$PATH`. If it is missing they fail with a message
 rather than pass silently.
