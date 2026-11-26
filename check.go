@@ -373,6 +373,13 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	// Paths that may never be in the repository.
 	forbidPrefix := []string{secDir + "/keys"}
 	ks := cfg.keystoreDir()
+	// A path that climbs with ".." can leave the repository and come back
+	// through a symlink of the working tree, and then neither view below
+	// can tell where it lands in the snapshot. Such a path is refused; the
+	// default lives under ~ and never needs one.
+	if err := checkKeystorePath(ks); err != nil {
+		add(cfgPath, 0, 0, ckConfig, "%v", err)
+	}
 	// Two views of where the keystore is, and both count:
 	//  - lexical: a relative path names a place in the repository whatever
 	//    the working tree has there now (a directory in the snapshot may be a

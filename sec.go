@@ -155,6 +155,16 @@ func splitList(v string) []string {
 }
 
 // keystoreDir is the keystore path with ~ expanded; $SEGSCAN_KEYSTORE wins.
+// checkKeystorePath refuses "." and ".." components in the keystore path.
+func checkKeystorePath(p string) error {
+	for _, c := range strings.Split(p, string(filepath.Separator)) {
+		if c == "." || c == ".." {
+			return fmt.Errorf("keystore %q: no . or .. components allowed", p)
+		}
+	}
+	return nil
+}
+
 func (c *secConfig) keystoreDir() string {
 	p := c.Keystore
 	if e := os.Getenv("SEGSCAN_KEYSTORE"); e != "" {

@@ -437,6 +437,14 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 		r.must("rm", "vault")
 		r.must("git", "rm", "-q", "--cached", "vault/keys")
 	}
+	// A path that leaves the repository with ".." and comes back is refused
+	// as such: in the snapshot it may land somewhere the working tree cannot
+	// show.
+	r.write(".sec/config", "keystore = "+r.dir+"/link/../../"+filepath.Base(r.dir)+"/vault\n")
+	r.must("git", "add", "-A")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "no . or .. components allowed") {
+		t.Errorf("keystore path with ..: exit %d\n%s", code, out)
+	}
 	// The keystore cannot be the repository itself.
 	r.write(".sec/config", "keystore = .\n")
 	r.must("git", "add", "-A")
