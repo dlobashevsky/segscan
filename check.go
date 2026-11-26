@@ -366,9 +366,41 @@ func (ck *checker) info(s *snapshot, f snapFile) *fileInfo {
 func (ck *checker) runKnown(s *snapshot) []checkFinding {
 	allow := &allowList{fp: map[string]bool{}}
 	allow.add(s.file(secDir + "/allow"))
+	// A commit from before .sec/ existed is still searched for known
+	// values (a repository taken over carries its old leaks there), but a
+	// binary it holds is not reported as not fully scanned: no .sec/allow
+	// can ever be added to that commit.
+	hasSec := false
+	for _, f := range s.Files {
+		if f.Path == secDir || strings.HasPrefix(f.Path, secDir+"/") {
+			hasSec = true
+			break
+		}
+	}
 	var out []checkFinding
 	for _, f := range s.Files {
-		if f.Link || f.Gitlink {
+		if f.Gitlink {
+			continue
+		}
+		if f.Link {
+			// The target of a symlink is text in the repository too.
+			var t []byte
+			var err error
+			if f.OID != "" {
+				t, err = s.read(f)
+			} else {
+				var l string
+				l, err = os.Readlink(filepath.Join(ck.top, f.Path))
+				t = []byte(l)
+			}
+			if err != nil {
+				die(err)
+			}
+			found, _ := ck.known.knownFindings(f.Path, t)
+			for _, x := range found {
+				x.Commit, x.File, x.Msg = s.Commit, f.Path, x.Msg+" in the symlink target"
+				out = append(out, x)
+			}
 			continue
 		}
 		fi := ck.info(s, f)
@@ -384,7 +416,7 @@ func (ck *checker) runKnown(s *snapshot) []checkFinding {
 			x.Commit, x.File = s.Commit, f.Path
 			out = append(out, x)
 		}
-		if fi.notFully != "" && !allowedBinary(allow, f.Path) {
+		if fi.notFully != "" && hasSec && !allowedBinary(allow, f.Path) {
 			out = append(out, checkFinding{Commit: s.Commit, File: f.Path, Check: ckKnown,
 				Msg: "binary file not fully scanned (" + fi.notFully + "); to keep it, add path:" + f.Path + " to .sec/allow"})
 		}

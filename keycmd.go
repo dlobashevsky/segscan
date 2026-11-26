@@ -180,9 +180,15 @@ func keyCheck(args []string) {
 			problems++
 		}
 	}
+	invalid := map[string]bool{}
+	for _, k := range ks.invalid {
+		invalid[k.Name] = true
+		add("key", k.Name, "value outside the allowed characters (printable ASCII, no spaces, quotes, backslash or #): segscan key set "+k.Name, true)
+	}
 	for _, k := range names.Keys {
 		v, ok := ks.keys[k.Name]
 		switch {
+		case !ok && invalid[k.Name]:
 		case !ok:
 			add("key", k.Name, "no value (segscan key set "+k.Name+")", true)
 		case v.UUID != k.UUID:

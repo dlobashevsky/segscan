@@ -172,22 +172,7 @@ func errorsIsNotExist(err error) bool {
 // treeDirsOK checks that every existing component of the repository
 // directory dir is a plain directory, so a write planned there cannot fail
 // halfway through an import.
-func treeDirsOK(r *repoView, dir string) error {
-	cur := ""
-	for _, c := range strings.Split(dir, "/") {
-		next := path.Join(cur, c)
-		fd, err := walkDirs(r.fd, next, false)
-		if err != nil {
-			if errorsIsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		syscall.Close(fd)
-		cur = next
-	}
-	return nil
-}
+func treeDirsOK(r *repoView, dir string) error { return walkExisting(r.fd, dir) }
 
 // ---------- placeholders -> values ----------
 
@@ -320,7 +305,7 @@ func planNode(r *repoView, ks *keystore, root string, filter []string) ([]*expan
 		}
 		for _, f := range filter {
 			f = "/" + strings.Trim(f, "/")
-			if n == f || strings.HasPrefix(n, f+"/") {
+			if f == "/" || n == f || strings.HasPrefix(n, f+"/") {
 				return true
 			}
 		}
@@ -437,6 +422,22 @@ func cmdExpand(args []string) {
 	} else if dfd, err = openDirPinned(dir, false); err != nil {
 		dfd = -1 // nothing there yet: everything would be new
 	}
+	// Whatever is in the way in the staging directory is found before the
+	// first write, not halfway through.
+	if dfd >= 0 {
+		for _, it := range items {
+			if err := stagePreflight(dfd, it); err != nil {
+				errs = append(errs, it.node+": "+err.Error())
+			}
+		}
+		if len(errs) > 0 {
+			for _, e := range errs {
+				fmt.Fprintln(os.Stderr, "segscan:", e)
+			}
+			fmt.Fprintf(os.Stderr, "segscan: %d problem(s) in %s; nothing written\n", len(errs), dir)
+			os.Exit(1)
+		}
+	}
 	changed := 0
 	for _, it := range items {
 		ch, err := stageItem(dfd, it, *dry)
@@ -453,6 +454,53 @@ func cmdExpand(args []string) {
 		verb = "would change"
 	}
 	fmt.Fprintf(os.Stderr, "segscan: %d of %d entries %s under %s\n", changed, len(items), verb, dir)
+}
+
+// stagePreflight: every existing component on the way to the entry is a
+// plain directory, and the entry itself is of a kind it can replace.
+func stagePreflight(dfd int, it *expandItem) error {
+	rel := strings.TrimPrefix(it.target, "/")
+	dir := path.Dir(rel)
+	if it.entry.Type == "d" {
+		dir = rel
+	}
+	if err := walkExisting(dfd, dir); err != nil {
+		return err
+	}
+	if it.entry.Type == "d" {
+		return nil
+	}
+	pfd, err := walkDirs(dfd, path.Dir(rel), false)
+	if err != nil {
+		return nil // not there yet: it will be created
+	}
+	defer syscall.Close(pfd)
+	if st, err := lstatAt(pfd, path.Base(rel)); err == nil && st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
+		return fmt.Errorf("a directory is in the way")
+	}
+	return nil
+}
+
+// walkExisting: the existing prefix of dir below dfd is made of plain
+// directories (a missing rest is fine).
+func walkExisting(dfd int, dir string) error {
+	cur := ""
+	for _, c := range strings.Split(dir, "/") {
+		if c == "" || c == "." {
+			continue
+		}
+		next := path.Join(cur, c)
+		fd, err := walkDirs(dfd, next, false)
+		if err != nil {
+			if errorsIsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		syscall.Close(fd)
+		cur = next
+	}
+	return nil
 }
 
 // stageItem writes one entry under the staging directory dfd and says

@@ -199,11 +199,17 @@ func formsOf(v []byte, chains [][]string) []form {
 // weakForm: shorter than 8 bytes, or cheap under the cost model: fewer than
 // 4 distinct bytes, or text that the statistical scanner with the built-in
 // model and default thresholds finds nothing random in (a word, a version,
-// a path). The built-in model, not the repository's, so the decision only
-// changes with a segscan release.
+// a path). Binary forms of 64 bytes and more, and any form of 4 KiB and
+// more, are strong. The built-in model, not the repository's, so the
+// decision only changes with a segscan release.
 func weakForm(d []byte) bool {
 	if len(d) < 8 || distinct(d) < 4 {
 		return true
+	}
+	if len(d) >= 4096 || len(d) >= 64 && !utf8.Valid(d) {
+		// Only a copy matches this much text, or binary data, by chance:
+		// strong, without running the scanner over a whole secret file.
+		return false
 	}
 	if baseModel == nil {
 		return false

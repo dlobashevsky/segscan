@@ -1116,3 +1116,17 @@ and tests intact.
       journal's contents, which hold the replaced value in `retired`; the
       journal holds `keys` and `retired` whole, so applying it twice is
       harmless.
+    - Check 6 still runs on commits from before `.sec/` (6.5 lists only
+      grammar, forbidden paths and private keys for them): the known values
+      are exactly what a repository taken over carries in its old history.
+      Only the "not fully scanned" finding is left out there, since no
+      `.sec/allow` can be added to such a commit.
+    - Patterns of a binary secret file are its whole content only, no lines
+      or values; a whole content over 64 KiB gets the bare form and single
+      transforms only, so a large PKCS#12 bundle stays cheap for every hook
+      (5.1 asks for this without a streaming matcher). A binary form of 64
+      bytes or more and any form of 4 KiB or more is strong without asking
+      the scanner.
+    - Symlink targets are searched like file content. A `keys` line whose
+      value is outside the alphabet is reported by `key check`, searched by
+      check 6, unusable for `expand`, and retired by the next `key set`.

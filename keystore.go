@@ -137,12 +137,17 @@ func (ks *keystore) load(j *journal) error {
 		if l == "" || l[0] == '#' {
 			continue
 		}
-		f := strings.Split(l, "\t")
-		if len(f) != 3 || !validName(f[0]) || !isUUID([]byte(f[1]), false) || !validValue(f[2]) {
-			return fmt.Errorf("%s/keys:%d: expected name<TAB>uuid<TAB>value, the value printable ASCII without quotes, backslash or #", ks.path, no+1)
+		f := strings.SplitN(l, "\t", 3)
+		if len(f) != 3 || !validName(f[0]) || !isUUID([]byte(f[1]), false) || f[2] == "" {
+			return fmt.Errorf("%s/keys:%d: expected name<TAB>uuid<TAB>value", ks.path, no+1)
 		}
 		if _, dup := ks.keys[f[0]]; dup {
 			return fmt.Errorf("%s/keys:%d: duplicate key %s", ks.path, no+1, f[0])
+		}
+		if !validValue(f[2]) {
+			// Not usable, but still searched; key check reports it.
+			ks.invalid = append(ks.invalid, ksKey{f[0], f[1], f[2]})
+			continue
 		}
 		ks.keys[f[0]] = ksKey{f[0], f[1], f[2]}
 	}
@@ -157,8 +162,10 @@ func (ks *keystore) load(j *journal) error {
 		if l == "" || l[0] == '#' {
 			continue
 		}
-		f := strings.Split(l, "\t")
-		if len(f) != 5 || !validName(f[0]) || !validValue(f[4]) {
+		// A retired value may be one that was outside the alphabet: it is
+		// only searched, never written anywhere.
+		f := strings.SplitN(l, "\t", 5)
+		if len(f) != 5 || !validName(f[0]) || f[4] == "" {
 			return fmt.Errorf("%s/retired:%d: expected name<TAB>uuid<TAB>rotation<TAB>time<TAB>value", ks.path, no+1)
 		}
 		ks.retired = append(ks.retired, ksRetired{f[0], f[1], f[2], f[3], f[4]})
@@ -222,6 +229,11 @@ func (ks *keystore) keysText() []byte {
 		k := ks.keys[n]
 		b.WriteString(k.Name + "\t" + k.UUID + "\t" + k.Value + "\n")
 	}
+	for _, k := range ks.invalid { // kept until key set replaces them
+		if _, ok := ks.keys[k.Name]; !ok {
+			b.WriteString(k.Name + "\t" + k.UUID + "\t" + k.Value + "\n")
+		}
+	}
 	return []byte(b.String())
 }
 
@@ -252,6 +264,9 @@ type journal struct {
 // through the pending journal, so a crash at any point leaves it searchable.
 func (ks *keystore) set(name, uuid, value string) (retiredOld bool, err error) {
 	old, had := ks.keys[name]
+	if !had {
+		old, had = ks.takeInvalid(name) // an unusable value is still retired, not dropped
+	}
 	if had && old.Value == value && old.UUID == uuid {
 		return false, nil
 	}
@@ -264,8 +279,22 @@ func (ks *keystore) set(name, uuid, value string) (retiredOld bool, err error) {
 }
 
 // retire moves the current value of name to retired.
+// takeInvalid removes and returns the invalid line of name.
+func (ks *keystore) takeInvalid(name string) (ksKey, bool) {
+	for i, k := range ks.invalid {
+		if k.Name == name {
+			ks.invalid = append(ks.invalid[:i:i], ks.invalid[i+1:]...)
+			return k, true
+		}
+	}
+	return ksKey{}, false
+}
+
 func (ks *keystore) retire(name string) error {
 	old, had := ks.keys[name]
+	if !had {
+		old, had = ks.takeInvalid(name)
+	}
 	if !had {
 		return fmt.Errorf("no value of %s in the keystore", name)
 	}

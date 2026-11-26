@@ -74,7 +74,7 @@ func (m *kvMatcher) addValue(src int, v []byte, part string, chains [][]string) 
 			continue
 		}
 		m.addPattern(f.Data, kvHit{src: src, chain: f.Chain, part: part})
-		if ascii(f.Data) {
+		if len(f.Data) <= maxForm && utf8.Valid(f.Data) {
 			m.addPattern(utf16(f.Data, false), kvHit{src: src, chain: f.Chain, part: part, enc: "UTF-16LE"})
 			m.addPattern(utf16(f.Data, true), kvHit{src: src, chain: f.Chain, part: part, enc: "UTF-16BE"})
 		}
@@ -90,13 +90,23 @@ func ascii(b []byte) bool {
 	return true
 }
 
+// utf16 encodes valid UTF-8 text as UTF-16, little or big endian.
 func utf16(b []byte, be bool) []byte {
 	out := make([]byte, 0, 2*len(b))
-	for _, c := range b {
+	put := func(u uint16) {
 		if be {
-			out = append(out, 0, c)
+			out = append(out, byte(u>>8), byte(u))
 		} else {
-			out = append(out, c, 0)
+			out = append(out, byte(u), byte(u>>8))
+		}
+	}
+	for _, r := range string(b) {
+		if r >= 0x10000 {
+			r -= 0x10000
+			put(uint16(0xd800 + r>>10))
+			put(uint16(0xdc00 + r&0x3ff))
+		} else {
+			put(uint16(r))
 		}
 	}
 	return out
@@ -120,7 +130,7 @@ func secretPatterns(data []byte) (whole []byte, lines, values [][]byte) {
 		l = bytes.Trim(l, " \t")
 		add(&lines, l)
 		if i := bytes.IndexByte(l, '='); i > 0 {
-			v := l[i+1:]
+			v := bytes.Trim(l[i+1:], " \t") // name = value as in my.cnf
 			add(&values, v)
 			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
 				add(&values, v[1:len(v)-1])
@@ -138,6 +148,9 @@ func buildMatcher(ks *keystore, extra map[string]bool) *kvMatcher {
 		k := ks.keys[name]
 		m.addValue(m.source("value of key "+k.Name), []byte(k.Value), "", chains)
 	}
+	for _, k := range ks.invalid {
+		m.addValue(m.source("value of key "+k.Name), []byte(k.Value), "", chains)
+	}
 	for _, r := range ks.retired {
 		m.addValue(m.source("retired value of key "+r.Name), []byte(r.Value), "", chains)
 	}
@@ -148,8 +161,17 @@ func buildMatcher(ks *keystore, extra map[string]bool) *kvMatcher {
 		}
 		src := m.source(what)
 		whole, lines, values := secretPatterns(f.Data)
+		if !isTextFile(f.Data) {
+			// A binary secret (a PKCS#12 bundle) has no lines or values,
+			// only its content.
+			lines, values = nil, nil
+		}
 		if whole != nil {
-			m.addValue(src, whole, "content", chains)
+			wc := chains
+			if len(whole) > maxForm {
+				wc = chains[:1+len(transformOrder)] // bare and single transforms
+			}
+			m.addValue(src, whole, "content", wc)
 		}
 		for _, l := range lines {
 			m.addValue(src, l, "a line", chains)
@@ -220,28 +242,29 @@ func (m *kvMatcher) scanBinary(data []byte, from string, depth int, out *[]kvFou
 		return m.scanBinary(content, name, depth+1, out)
 	}
 	if zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data))); err == nil {
-		total := 0
+		total, why := 0, ""
 		for _, f := range zr.File {
 			if strings.HasSuffix(f.Name, "/") {
 				continue
 			}
+			// One member that cannot be read must not hide the others: keep
+			// going and report the first reason at the end.
 			rc, err := f.Open()
 			if err != nil {
-				return "cannot unpack " + f.Name + ": " + err.Error()
+				why = first(why, "cannot unpack "+f.Name+": "+err.Error())
+				continue
 			}
 			b, err := io.ReadAll(io.LimitReader(rc, int64(unpackLimit-total+1)))
 			rc.Close()
 			if err != nil {
-				return "cannot unpack " + f.Name + ": " + err.Error()
+				why = first(why, "cannot unpack "+f.Name+": "+err.Error())
 			}
 			if total += len(b); total > unpackLimit {
-				return "unpacks to more than 64 MiB"
+				return first(why, "unpacks to more than 64 MiB")
 			}
-			if why := member(joinMember(from, f.Name), b); why != "" {
-				return why
-			}
+			why = first(why, member(joinMember(from, f.Name), b))
 		}
-		return ""
+		return why
 	}
 	// gzip members, wherever the first one starts: a text prefix (a
 	// self-extracting script) followed by gzip to the end of the file.
@@ -261,6 +284,13 @@ func (m *kvMatcher) scanBinary(data []byte, from string, depth int, out *[]kvFou
 		return "unpacks to more than 64 MiB"
 	}
 	return member(joinMember(from, fmt.Sprintf("gzip@%d", at)), b)
+}
+
+func first(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func joinMember(from, name string) string {
@@ -312,9 +342,13 @@ func (m *kvMatcher) knownFindings(p string, data []byte) (out []checkFinding, no
 	return out, notFully
 }
 
-// isModelFile: a statistical model (.sec/segscan.model) is gob, which stores its
+// isModelFile: the statistical model .sec/segscan.model is gob, which stores its
 // strings as they are, so the raw search above covers it.
 func isModelFile(p string, data []byte) bool {
-	_, err := decodeModel(bytes.NewReader(data), p)
-	return err == nil
+	if p != secDir+"/segscan.model" {
+		return false
+	}
+	r := bytes.NewReader(data)
+	_, err := decodeModel(r, p)
+	return err == nil && r.Len() == 0 // nothing appended behind the model
 }

@@ -446,6 +446,11 @@ func cmdImport(args []string) {
 				}
 			}
 		}
+		if fd, err := walkDirs(r.fd, rp, false); err == nil {
+			syscall.Close(fd)
+			problems = append(problems, rp+" is a directory in the tree")
+			continue
+		}
 		existing, exLink, exErr := r.read(rp)
 		switch {
 		case *secret != "":
@@ -463,6 +468,10 @@ func cmdImport(args []string) {
 		case lf.link:
 			it.entry.Type, it.out = "l", lf.data
 			it.note = "symlink -> " + string(lf.data)
+			found, _ := matcher.knownFindings(rp, lf.data)
+			for _, f := range found {
+				problems = append(problems, fmt.Sprintf("%s: the symlink target holds a %s", p, f.Msg))
+			}
 		default:
 			it.entry.Type = "f"
 			if exErr != nil || exLink {

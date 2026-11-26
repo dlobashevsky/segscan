@@ -271,6 +271,9 @@ Back it up like ssh keys. Two deploy machines: copy it with the modes kept
   `kind name problem`: keys without a value, values without a name, uuid
   mismatches (another project's keystore), secret files without a type `s`
   entry and type `s` entries without a file. Exit 1 if there is any.
+- A line of `keys` whose value is outside the allowed characters (edited
+  by hand) is listed by `key check`; check 6 still searches it, `expand`
+  treats the key as having no value, and `key set` retires it.
 - `key check -weak` also lists keys whose value has weak forms (below):
   check 6 does not search those forms, so these values are only partly
   protected. Weak or default passwords as such are not segscan's job; use a
@@ -392,7 +395,17 @@ Check 6 in detail:
   self-extracting script) and ZIP archives hold, two levels deep, 64 MiB at
   most. Any other binary (PNG, PDF, tar, ...) is reported as "not fully
   scanned" until `.sec/allow` has `path:<glob>` for it; the raw bytes are
-  still searched. `.sec/segscan.model` is read in full.
+  still searched. One unreadable member of a ZIP (a `.class` in a JAR)
+  does not stop the search of the others. `.sec/segscan.model` is read in
+  full.
+- Symlink targets are searched too.
+- A binary secret file (a PKCS#12 bundle) is searched by its whole content
+  only; one larger than 64 KiB only bare and under single transforms, so
+  even a large one costs little on every hook.
+- Commits from before `.sec/` existed are still searched for known values
+  (a repository you take over carries its old leaks there), but their
+  binary files are not reported as "not fully scanned": an allowlist can no
+  longer be added to such a commit.
 - The message names the key or secret file and the form, never the value.
 
 Example:

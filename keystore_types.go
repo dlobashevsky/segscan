@@ -34,6 +34,7 @@ type keystore struct {
 	fd      int
 	keys    map[string]ksKey
 	retired []ksRetired
+	invalid []ksKey  // keys lines whose value is outside the alphabet: key check reports them, check 6 searches them
 	files   []ksFile // current and retired secret files
 }
 

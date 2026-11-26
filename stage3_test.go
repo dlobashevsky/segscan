@@ -551,3 +551,126 @@ func TestCLIImportPreflightAndLinks(t *testing.T) {
 		t.Errorf("link %q", l)
 	}
 }
+
+// Findings of the stage 3 review, one case each.
+func TestCLIReviewFindings(t *testing.T) {
+	r, ks := newKSRepo(t)
+	v := "Zx81kq9PmW3vT7bRq2"
+	r.setKey("a", v, "-base58")
+	// A ZIP whose first member is binary: the later text member is searched.
+	var zb bytes.Buffer
+	z := zip.NewWriter(&zb)
+	f, _ := z.Create("a.class")
+	f.Write([]byte("\xca\xfe\xba\xbe\x00\x00binary"))
+	f, _ = z.Create("conf.properties")
+	f.Write([]byte("password=" + v))
+	z.Close()
+	r.write("nodes/n1/app.jar", zb.String())
+	r.write(".sec/allow", "path:nodes/n1/app.jar\n")
+	// A secret file with "name = value", a value found elsewhere.
+	os.MkdirAll(filepath.Join(ks, "files"), 0o700)
+	os.WriteFile(filepath.Join(ks, "files", "mycnf"), []byte("[client]\npassword = Qm7Rt2Wx9Lp4Kz8Nv3\n"), 0o600)
+	r.write("nodes/n1/etc/db.env", "DB_PASS=Qm7Rt2Wx9Lp4Kz8Nv3\n")
+	// A value in a symlink target.
+	os.MkdirAll(filepath.Join(r.dir, "nodes/n1/etc"), 0o755)
+	os.Symlink("/run/"+v, filepath.Join(r.dir, "nodes/n1/etc/tok"))
+	r.must("segscan", "manifest", "fix")
+	out, _, _ := r.run("segscan", "check")
+	for _, w := range []string{
+		"nodes/n1/app.jar\t0\t0\tknown_value\tvalue of key a inside conf.properties",
+		"nodes/n1/etc/db.env\t1\t9\tknown_value\ta value of secret file mycnf",
+		"nodes/n1/etc/tok\t1\t6\tknown_value\tvalue of key a in the symlink target",
+	} {
+		if !strings.Contains(out, w) {
+			t.Errorf("missing %q in\n%s", w, out)
+		}
+	}
+	// A bad line in keys is a key check row, not a failure of every check.
+	keys := readKS(t, ks, "keys")
+	os.WriteFile(filepath.Join(ks, "keys"), []byte(keys+"bad\t"+newUUID()+"\thas space\n"), 0o600)
+	out, _, code := r.run("segscan", "key", "check")
+	if code != 1 || !strings.Contains(out, "key\tbad\tvalue outside the allowed characters") {
+		t.Errorf("invalid value: exit %d\n%s", code, out)
+	}
+	if _, _, code := r.run("segscan", "check"); code != 1 {
+		t.Errorf("check with an invalid keystore value: exit %d", code)
+	}
+	r.must("segscan", "key", "add", "bad")
+	r.must("segscan", "key", "set", "bad", "-gen", "12")
+	if !strings.Contains(readKS(t, ks, "retired"), "\thas space") {
+		t.Error("the invalid value was dropped, not retired")
+	}
+	// Nothing written when a directory is in the way.
+	live := t.TempDir()
+	a := mkLive(t, live, "etc/aaa.conf", "x=1\n")
+	z2 := mkLive(t, live, "etc/zzz.conf", "y=1\n")
+	os.MkdirAll(filepath.Join(r.dir, "nodes/n1"+z2), 0o755)
+	if _, _, code := r.run("segscan", "import", "-node", "n1", a, z2); code != 1 {
+		t.Errorf("import with a directory in the way: exit %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "nodes/n1"+a)); !os.IsNotExist(err) {
+		t.Error("import wrote before failing")
+	}
+	os.Remove(filepath.Join(r.dir, "nodes/n1"+z2))
+	r.write("nodes/n1/etc/aaa.conf", "a\n")
+	r.write("nodes/n1/etc/zzz.conf", "z\n")
+	os.Remove(filepath.Join(r.dir, "nodes/n1/etc/tok"))
+	os.Remove(filepath.Join(r.dir, "nodes/n1/etc/db.env"))
+	r.must("segscan", "manifest", "fix")
+	to := filepath.Join(t.TempDir(), "s")
+	os.MkdirAll(filepath.Join(to, "etc/zzz.conf"), 0o700)
+	if _, _, code := r.run("segscan", "expand", "-node", "n1", "-to", to); code != 1 {
+		t.Errorf("expand with a directory in the way: exit %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(to, "etc/aaa.conf")); !os.IsNotExist(err) {
+		t.Error("expand wrote before failing")
+	}
+	// "/" selects the whole node.
+	os.RemoveAll(to)
+	if out := r.must("segscan", "expand", "-node", "n1", "-to", to, "/"); !strings.Contains(out, "/etc/aaa.conf") {
+		t.Errorf("expand /:\n%s", out)
+	}
+}
+
+func TestCLIKnownBeforeSec(t *testing.T) {
+	r := newRepo(t)
+	r.write("logo.png", "\x89PNG\r\n\x1a\n\x00\x00binary")
+	r.write("old.conf", "pass=Zx81kq9PmW3vT7bRq2\n")
+	r.must("git", "add", "-A")
+	r.must("git", "commit", "-qm", "before sec")
+	ks := filepath.Join(t.TempDir(), "ks")
+	for i, e := range r.env {
+		if strings.HasPrefix(e, "SEGSCAN_KEYSTORE=") {
+			r.env[i] = "SEGSCAN_KEYSTORE=" + ks
+		}
+	}
+	r.must("segscan", "init")
+	r.must("git", "rm", "-q", "logo.png", "old.conf")
+	r.setKey("a", "Zx81kq9PmW3vT7bRq2")
+	r.write(".sec/allow", "path:logo.png\n")
+	r.must("git", "add", "-A")
+	r.must("git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "sec")
+	out, _, _ := r.run("segscan", "check", "-all")
+	if !strings.Contains(out, "old.conf\t1\t6\tknown_value\tvalue of key a") {
+		t.Errorf("an old leak before .sec/ is still found:\n%s", out)
+	}
+	if strings.Contains(out, "logo.png") {
+		t.Errorf("a binary before .sec/ cannot be allowlisted, so it is not reported:\n%s", out)
+	}
+}
+
+func TestBigSecretFile(t *testing.T) {
+	big := make([]byte, 1<<20)
+	for i := range big {
+		big[i] = byte(i*7919 + i>>8)
+	}
+	ks := &keystore{keys: map[string]ksKey{}, files: []ksFile{{Name: "p12", Data: big}}}
+	m := buildMatcher(ks, nil)
+	if len(m.pats) > 20 {
+		t.Errorf("%d patterns for one binary secret file", len(m.pats))
+	}
+	found, _ := m.knownFindings("x.bin", append([]byte("prefix\x00"), big...))
+	if len(found) == 0 {
+		t.Error("the secret file itself is not found")
+	}
+}
