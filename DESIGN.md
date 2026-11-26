@@ -629,7 +629,12 @@ Needs the keystore.
   hand and checked to stay under `<root>`. A symlink swapped in during the
   run is therefore not followed either. The final target of every entry,
   type `s` and `d` included, must be under `<root>` once resolved, whatever
-  the manifest says. Type `l` entries are created as symlinks, never written
+  the manifest says. Before the first write, every entry's target is
+  resolved (through declared links, as above) and the resolved targets are
+  compared: two entries that land on the same file, such as `link/token`
+  and `real/token` with `link -> real`, are an error naming both, so the
+  order of the manifest never decides what is deployed. The same holds for
+  `-to`. Type `l` entries are created as symlinks, never written
   through.
 
   It first handles the type `d`
@@ -682,7 +687,10 @@ Blocking checks (exit 1):
    digit, `_` or `-` on either side, and only inside the key's scope. That
    scope is the union of the scope in the keystore line (4.3) and the key's
    scope in `.sec/names` of every reachable commit (all refs, as `--all`
-   walks them), not of one branch or one "last" commit: a value may have
+   walks them) and of the snapshot being checked itself (the index for
+   `--staged`, the working tree, each commit of a range), not of one branch
+   or one "last" commit. A staged change that widens a scope is therefore
+   searched in its new paths by the very pre-commit check that sees it: a value may have
    been committed on any branch under the scope that branch gives. A
    retired record adds its own stored scope. The union is part of the
    digest (below), so a branch that widens a scope makes the key be checked
