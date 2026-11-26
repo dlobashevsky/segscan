@@ -364,17 +364,31 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	// Paths that may never be in the repository.
 	forbidPrefix := []string{secDir + "/keys"}
 	ks := cfg.keystoreDir()
+	// Two views of where the keystore is, and both count:
+	//  - lexical: a relative path names a place in the repository whatever
+	//    the working tree has there now (a directory in the snapshot may be a
+	//    symlink elsewhere in the working tree);
+	//  - real: a path that reaches the repository through a symlink alias is
+	//    still inside it.
+	var rels []string
 	if !filepath.IsAbs(ks) {
+		rels = append(rels, filepath.Clean(ks))
 		ks = filepath.Join(ck.top, ks)
 	}
-	// Compare real paths: a keystore reached through a symlink alias of the
-	// repository is still inside it.
-	rel, relErr := filepath.Rel(canonical(ck.top), canonical(ks))
-	if relErr == nil && rel == "." {
-		add(cfgPath, 0, 0, ckConfig, "the keystore cannot be the repository itself")
+	if rel, err := filepath.Rel(canonical(ck.top), canonical(ks)); err == nil {
+		rels = append(rels, rel)
 	}
-	if relErr == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
-		forbidPrefix = append(forbidPrefix, filepath.ToSlash(rel))
+	inRepo := false
+	for _, rel := range rels {
+		switch {
+		case rel == ".":
+			inRepo = true
+		case rel != ".." && !strings.HasPrefix(rel, "../"):
+			forbidPrefix = append(forbidPrefix, filepath.ToSlash(rel))
+		}
+	}
+	if inRepo {
+		add(cfgPath, 0, 0, ckConfig, "the keystore cannot be the repository itself")
 	}
 
 	for _, f := range s.Files {

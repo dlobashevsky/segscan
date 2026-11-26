@@ -395,6 +395,19 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 	}
 	r.must("git", "rm", "-q", "--cached", "vault/keys")
 	r.must("rm", "-r", "vault")
+	// A relative keystore is in the repository whatever the working tree has
+	// at that path: the index has vault/keys, the working tree a symlink
+	// pointing outside.
+	r.write(".sec/config", "keystore = vault\n")
+	r.write("vault/keys", "x\n")
+	r.must("git", "add", "-A")
+	r.must("rm", "-r", "vault")
+	r.must("ln", "-s", t.TempDir(), "vault")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "vault/keys\t0\t0\tforbidden") {
+		t.Errorf("relative keystore replaced by a symlink in the working tree: exit %d\n%s", code, out)
+	}
+	r.must("rm", "vault")
+	r.must("git", "rm", "-q", "--cached", "vault/keys")
 	// The keystore cannot be the repository itself.
 	r.write(".sec/config", "keystore = .\n")
 	r.must("git", "add", "-A")
