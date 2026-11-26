@@ -682,3 +682,42 @@ func TestCLIKeystoreThroughDanglingLink(t *testing.T) {
 		t.Errorf("keystore through a dangling link: exit %d\n%s", code, out)
 	}
 }
+
+func TestCLIScanThresholdsFromConfig(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	r.write("app.conf", "token = Zx81kq9PmW3vT7bRq2Lp4\nid = k9Pm\n")
+	out, _, code := r.run("segscan", "scan", "app.conf")
+	if code != 1 || !strings.Contains(out, "app.conf") {
+		t.Fatalf("baseline: exit %d\n%s", code, out)
+	}
+	cfg := r.read(".sec/config")
+	r.write(".sec/config", cfg+"scan_minlen = 30\n")
+	if out, _, code := r.run("segscan", "scan", "app.conf"); code != 0 {
+		t.Errorf("scan_minlen = 30: exit %d\n%s", code, out)
+	}
+	if _, _, code := r.run("segscan", "scan", "-minlen", "6", "app.conf"); code != 1 {
+		t.Errorf("-minlen on the command line must win: exit %d", code)
+	}
+	r.write(".sec/config", cfg+"scan_bpc = 8\n")
+	if out, _, code := r.run("segscan", "scan", "app.conf"); code != 0 {
+		t.Errorf("scan_bpc = 8: exit %d\n%s", code, out)
+	}
+	// The hook takes the thresholds from the index.
+	r.write(".sec/config", cfg+"scan_bpc = 8\nhook_scan = block\n")
+	r.must("git", "add", ".sec")
+	r.must("git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "sec")
+	r.write(".sec/config", cfg+"hook_scan = block\n") // unstaged: no threshold
+	r.must("git", "add", "app.conf")
+	if out, errs, code := r.run("segscan", "hook"); code != 0 {
+		t.Errorf("hook with the staged scan_bpc = 8: exit %d\n%s%s", code, out, errs)
+	}
+	// And the other way round: an unstaged threshold must not hide what
+	// the staged config, which has none, reports.
+	r.write(".sec/config", cfg+"hook_scan = block\n")
+	r.must("git", "add", ".sec")
+	r.write(".sec/config", cfg+"hook_scan = block\nscan_bpc = 8\nscan_minlen = 30\n")
+	if _, _, code := r.run("segscan", "hook"); code != 1 {
+		t.Errorf("hook with an unstaged scan_bpc = 8: exit %d, want the staged config's finding", code)
+	}
+}

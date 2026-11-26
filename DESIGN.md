@@ -163,6 +163,8 @@ roots       = nodes/*          # where a node tree starts: nodes/n1/etc/... -> /
 skip_uuids  = all              # all | placeholders | off   (5.3)
 binary      = scan             # scan | skip: binary files in check/hook (8)
 hook_scan   = warn             # warn | block | off: the statistical part of the hook
+scan_bpc    = 4.5              # statistical scan: minimum bits per char (-bpc wins); unset: no limit
+scan_minlen = 12               # statistical scan: minimum length (-minlen wins); unset: 6
 forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never be committed
 ```
 
@@ -460,6 +462,9 @@ they tried.
 
 Creates `.sec/` with `config`, an empty `names`, `manifest`, `allow`,
 `.gitignore` and `hooks/`, and runs `git config core.hooksPath .sec/hooks`.
+It also creates an empty keystore (3.2) if there is none, unless
+`-no-keystore` is given: which values leaked into a repository taken over
+is often found out only later, and check 6 should run from the start.
 Run it again in every new clone (it only sets the hooks path when `.sec/`
 exists). The existing `install` command is unchanged and writes
 `.git/hooks/pre-commit` as before.

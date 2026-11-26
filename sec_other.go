@@ -19,6 +19,10 @@ func openKeystore(cfg *secConfig, top string, exclusive, create bool) (*keystore
 
 func (ks *keystore) close() {}
 
+func initKeystore(top string, cfg *secConfig) (string, error) {
+	return "keystore not created: " + errLinuxOnly.Error(), nil
+}
+
 func linuxOnly(what string) { die(fmt.Errorf("%s: %v", what, errLinuxOnly)) }
 
 func keySet([]string)    { linuxOnly("key set") }

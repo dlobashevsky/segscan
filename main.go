@@ -132,8 +132,28 @@ func (c *common) finish(fs *flag.FlagSet) {
 	if !c.set["m"] && os.Getenv("SEGSCAN_MODEL") == "" {
 		c.model = secPath(top, "segscan.model")
 	}
+	c.applySec(cfg)
+}
+
+// applySec takes the statistical settings of .sec/config for every flag
+// that was not given on the command line. A key the config leaves out
+// means the default, not whatever an earlier config set: the hook applies
+// the working tree's config first and then the staged one.
+func (c *common) applySec(cfg *secConfig) {
 	if !c.set["skip-uuids"] {
 		c.o.Skip = cfg.SkipUUIDs
+	}
+	if !c.set["bpc"] {
+		c.o.MinBpc = defaultOpts.MinBpc
+		if cfg.ScanBpc > 0 {
+			c.o.MinBpc = cfg.ScanBpc
+		}
+	}
+	if !c.set["minlen"] {
+		c.o.MinLen = defaultOpts.MinLen
+		if cfg.ScanMinLen > 0 {
+			c.o.MinLen = cfg.ScanMinLen
+		}
 	}
 }
 
@@ -581,9 +601,7 @@ func (c *common) fromIndex() bool {
 		die(fmt.Errorf("staged %s/config: %v", secDir, err))
 	}
 	c.sec = cfg
-	if !c.set["skip-uuids"] {
-		c.o.Skip = cfg.SkipUUIDs
-	}
+	c.applySec(cfg)
 	if !c.set["allow"] {
 		a := loadAllow("", !c.noDef)
 		if data, ok := show("allow"); ok {

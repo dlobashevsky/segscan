@@ -68,13 +68,46 @@ func openDirPinned(p string, create bool) (int, error) {
 				nfd, err = syscall.Openat(fd, c, dirFlags, 0)
 			}
 		}
-		syscall.Close(fd)
 		if err != nil {
-			return -1, pathErr(p, c, err)
+			err = describeAt(fd, p, c, err)
+			syscall.Close(fd)
+			return -1, err
 		}
+		syscall.Close(fd)
 		fd = nfd
 	}
 	return fd, nil
+}
+
+// describeAt explains why the component c in dfd could not be opened as a
+// directory: what is there instead.
+func describeAt(dfd int, p, c string, err error) error {
+	if err != syscall.ELOOP && err != syscall.ENOTDIR {
+		return pathErr(p, c, err)
+	}
+	st, serr := lstatAt(dfd, c)
+	if serr != nil {
+		return pathErr(p, c, err)
+	}
+	switch st.Mode & syscall.S_IFMT {
+	case syscall.S_IFLNK:
+		return &notDirError{p, c, "a symlink; segscan does not follow symlinks here"}
+	case syscall.S_IFREG:
+		if st.Size == 0 {
+			return &notDirError{p, c, "an empty regular file, not a directory"}
+		}
+		return &notDirError{p, c, "a regular file, not a directory"}
+	}
+	return &notDirError{p, c, "not a directory"}
+}
+
+type notDirError struct{ path, comp, what string }
+
+func (e *notDirError) Error() string {
+	if strings.HasSuffix(strings.TrimRight(e.path, "/"), "/"+e.comp) {
+		return fmt.Sprintf("%s is %s", e.path, e.what)
+	}
+	return fmt.Sprintf("%s: %s is %s", e.path, e.comp, e.what)
 }
 
 func pathErr(p, c string, err error) error {

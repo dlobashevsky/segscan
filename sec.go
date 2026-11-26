@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -24,13 +25,15 @@ const (
 )
 
 type secConfig struct {
-	Project   string
-	Keystore  string // as written, may start with ~/
-	Roots     []string
-	SkipUUIDs int
-	Binary    string // scan | skip
-	HookScan  string // warn | block | off
-	Forbid    []string
+	Project    string
+	Keystore   string // as written, may start with ~/
+	Roots      []string
+	SkipUUIDs  int
+	Binary     string // scan | skip
+	HookScan   string // warn | block | off
+	Forbid     []string
+	ScanBpc    float64 // statistical scan: report only findings with at least this many bits per char; 0: not set
+	ScanMinLen int     // statistical scan: minimum segment length; 0: not set
 }
 
 // secRoot returns the top directory of the current git repository if it has
@@ -133,6 +136,18 @@ func parseSecConfig(data []byte, project string) (*secConfig, error) {
 			cfg.HookScan = v
 		case "forbid":
 			cfg.Forbid = splitList(v)
+		case "scan_bpc":
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil || !(f > 0 && f <= 8) { // also refuses NaN
+				return nil, bad()
+			}
+			cfg.ScanBpc = f
+		case "scan_minlen":
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 1000 {
+				return nil, bad()
+			}
+			cfg.ScanMinLen = n
 		default:
 			return nil, fmt.Errorf("line %d: unknown key %q", no+1, k)
 		}
