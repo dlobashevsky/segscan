@@ -310,3 +310,32 @@ func TestSecConfigScanThresholds(t *testing.T) {
 		t.Error("** in path:")
 	}
 }
+
+func TestAllowPathGitignoreStyle(t *testing.T) {
+	cases := []struct {
+		pat, p string
+		want   bool
+	}{
+		{"data/", "data/ban/x/streets.csv", true},
+		{"data/ban/*", "data/ban/x/streets.csv", true}, // the glob matches the directory data/ban/x
+		{"data/ban/*", "data/ban/streets.csv", true},
+		{"data/ban", "data/ban/x/streets.csv", true},
+		{"data/**/*.csv", "data/ban/x/streets.csv", true},
+		{"*.csv", "data/ban/x/streets.csv", true},
+		{"ban", "data/ban/x/streets.csv", true}, // a name anywhere on the path
+		{"./data/", "data/x.csv", true},
+		{"data/", "./data/x.csv", true},
+		{"data/", "data", false}, // a directory pattern never names a file
+		{"data/ban/*", "data/other.csv", false},
+		{"*.csv", "data/x.json", false},
+		{"dat", "data/x.json", false},
+		{"other/", "data/other.csv", false},
+	}
+	for _, c := range cases {
+		a := &allowList{fp: map[string]bool{}}
+		a.add([]byte("path:" + c.pat + "\n"))
+		if got := a.skipPath(c.p); got != c.want {
+			t.Errorf("path:%s on %s = %v", c.pat, c.p, got)
+		}
+	}
+}

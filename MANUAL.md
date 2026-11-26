@@ -463,11 +463,23 @@ structured, validated by `check`, and full of paths and uuids.
 False positives:
 
 - add the `fp` column of the finding to `.sec/allow`, one per line;
-- `path:<glob>` in `.sec/allow` skips whole files: `path:*.json` by name
-  anywhere, `path:data/ban/` everything below a directory,
-  `path:data/**/*.csv` with `**` for any depth. Use it for files full of
-  ids (a list of UUIDs, a dump with alphanumeric codes). It does not hide
-  anything from check 6: known values are searched there too;
+- `path:<glob>` in `.sec/allow` skips whole files, the way `.gitignore`
+  does. The glob is matched against the path from the repository top,
+  wherever you run segscan and however you name the files (`scan .`,
+  `scan ./data`, from a subdirectory); one that matches a directory covers
+  everything below it:
+
+  | Line | Skips |
+  |---|---|
+  | `path:data/` or `path:data` | everything under `data/` |
+  | `path:data/ban/*` | everything under `data/ban/`, at any depth |
+  | `path:data/**/*.csv` | `.csv` files at any depth under `data/` |
+  | `path:*.csv` | `.csv` files anywhere |
+  | `path:fixtures` | every file or directory named `fixtures`, anywhere |
+
+  Use it for files full of ids (a list of UUIDs, a dump with alphanumeric
+  codes). It does not hide anything from check 6: known values are
+  searched there too;
 - `segscan:allow` on a line skips that line.
 
 `segscan train` with the keystore available first runs check 6 on its

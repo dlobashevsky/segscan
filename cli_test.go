@@ -721,3 +721,47 @@ func TestCLIScanThresholdsFromConfig(t *testing.T) {
 		t.Errorf("hook with an unstaged scan_bpc = 8: exit %d, want the staged config's finding", code)
 	}
 }
+
+func TestCLIScanAllowFromAnywhere(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init", "-no-keystore")
+	r.write("data/ban/x/streets.csv", "id,code\n1,Xk9Pm2Qw7Lz4Rt8Vb3Nc6\n")
+	r.write("app.conf", "token = Zx81kq9PmW3vT7bRq2Lp4\n")
+	r.write(".sec/allow", "path:data/ban/*\n")
+	r.must("git", "add", "-A")
+	run := func(dir string, args ...string) string {
+		cmd := exec.Command(filepath.Join(r.bin, "segscan"), args...)
+		cmd.Dir, cmd.Env = filepath.Join(r.dir, dir), r.env
+		out, _ := cmd.Output()
+		return string(out)
+	}
+	for _, c := range []struct {
+		dir  string
+		args []string
+	}{
+		{"", []string{"scan"}},
+		{"", []string{"scan", "."}},
+		{"", []string{"scan", "./data/ban/x/streets.csv", "app.conf"}},
+		{"data", []string{"scan"}},
+		{"data/ban", []string{"scan", "."}},
+		{"data", []string{"scan", "../app.conf", "ban/x/streets.csv"}},
+	} {
+		out := run(c.dir, c.args...)
+		if strings.Contains(out, "streets") {
+			t.Errorf("%s: segscan %v reports the allowlisted file:\n%s", c.dir, c.args, out)
+		}
+		if (c.dir == "" || len(c.args) > 1 && strings.Contains(strings.Join(c.args, " "), "app.conf")) && !strings.Contains(out, "app.conf") {
+			t.Errorf("%s: segscan %v lost app.conf:\n%s", c.dir, c.args, out)
+		}
+	}
+	// The manifest hint says to stage the manifest.
+	r.write("nodes/n1/etc/a.conf", "a=1\n")
+	r.must("git", "add", "-A")
+	_, errs, _ := r.run("segscan", "manifest", "fix")
+	if !strings.Contains(errs, "git add .sec/manifest") {
+		t.Errorf("manifest fix: %s", errs)
+	}
+	if out, _, _ := r.run("segscan", "check", "-staged"); !strings.Contains(out, "then git add .sec/manifest") {
+		t.Errorf("check -staged:\n%s", out)
+	}
+}

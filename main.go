@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const usage = `segscan - statistical secret scanner
@@ -264,6 +265,39 @@ func expand(paths []string) []string {
 	return out
 }
 
+var repoTop = func() func() string {
+	var once sync.Once
+	var top string
+	return func() string {
+		once.Do(func() {
+			if t, err := gitOut("rev-parse", "--show-toplevel"); err == nil {
+				top = canonical(t)
+			}
+		})
+		return top
+	}
+}()
+
+// repoPath gives a file named on the command line or by git ls-files (both
+// relative to the current directory) as a path from the repository top, the
+// form path:<glob> lines are written in. Outside a repository, or for a file
+// outside it, the path is only cleaned.
+func repoPath(f string) string {
+	top := repoTop()
+	if top == "" {
+		return cleanRel(f)
+	}
+	abs, err := filepath.Abs(f)
+	if err != nil {
+		return cleanRel(f)
+	}
+	rel, err := filepath.Rel(top, canonical(abs))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return cleanRel(f)
+	}
+	return cleanRel(rel)
+}
+
 func filesOrGit(paths []string) []string {
 	if len(paths) > 0 {
 		return expand(paths)
@@ -288,7 +322,7 @@ func train(files []string, allow *allowList, top, skip int, lists ...string) *Mo
 		t.addWords(data)
 	}
 	for _, f := range files {
-		if allow.skipPath(f) {
+		if allow.skipPath(repoPath(f)) {
 			continue
 		}
 		if data, ok := readText(f); ok {
@@ -504,7 +538,7 @@ func cmdScan(args []string) {
 		s.data("<stdin>", data)
 	} else {
 		for _, f := range filesOrGit(fs.Args()) {
-			if allow.skipPath(f) {
+			if allow.skipPath(repoPath(f)) {
 				continue
 			}
 			if data, ok := readText(f); ok {
