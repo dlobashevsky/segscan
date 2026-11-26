@@ -266,9 +266,9 @@ idempotent and `drift` (7.4) shows only real changes.
 | `b64url` | base64url, unpadded | tokens in URLs |
 | `urlenc` | percent-encoding, RFC 3986 unreserved kept, upper-case hex | query strings, nginx proxying to play |
 | `dq` | JSON string escaping: `\\`, `\"`, `\t`, `\r`, `\n`, other bytes below 0x20 and 0x7f as `\u00XX` | inside "..." in JSON, TOML basic strings, YAML double-quoted |
-| `nginxq` | `\\`, `\"`, `\t`, `\r`, `\n`; any other control byte is an error | inside "..." in nginx |
+| `nginxq` | `\\`, `\"`, `\t`, `\r`, `\n`; `$` and any other control byte are errors (nginx has no escape for `$`, which starts a variable) | inside "..." in nginx |
 | `sq` | `'` replaced with `'\''`; NUL is an error | inside '...' in sh |
-| `xml` | `& < > " '` as entities | XML text and attributes |
+| `xml` | `& < > " '` as entities; TAB, LF and CR as `&#9;` `&#10;` `&#13;`, which XML would otherwise normalize | XML text and attributes |
 
 Example: `Basic !SECKEY_ch_sts_<uuid>:b64!`. Salted hashes (bcrypt, apr1,
 crypt) cannot be transforms, because each run would produce new text. Files
@@ -503,7 +503,14 @@ Blocking checks (exit 1):
    detector; an allowlisted fp is respected).
 6. **Known values** (`known_value`; only when the keystore is available).
    No value of any key occurs, in any form from 6.3 step 1, in a text file
-   or anywhere in the bytes of a binary file (8). No secret file from
+   or anywhere in the bytes of a binary file (8). A weak value (shorter
+   than 8 bytes or cheap under the cost model, as in 6.3 step 5) would
+   match ordinary text everywhere (`0` in every `0600`), so it is searched
+   only as a whole token, with no letter, digit, `_` or `-` on either side,
+   and only inside the key's scope. A key with a weak value must therefore
+   have a scope; `key check` reports one that has none, and so does check
+   6. This restricts where a weak value is looked for, not what the value
+   may be. No secret file from
    `files/` is in the repository, under any path:
    - a file that contains the whole content of a (non-empty) secret file anywhere, as
      a substring of its raw or unpacked bytes, is a finding. Equality alone
