@@ -125,10 +125,13 @@ a staging directory inside the keystore. Under the lock it merges
 `retired` and `retired-files/` first, as a union by rotation id (nothing
 retired on either side is ever lost). A destination value that would be
 displaced, a current key value or a current secret file that differs from
-the source's and is not already in the source's retired records (rotated
-or set up locally), is first retired on the destination with a fresh
-rotation id, so it stays searchable there and is never silently dropped;
-`keys receive` lists each such value by name. Then it updates `files/`,
+the source's (rotated or set up locally), is first retired on the
+destination with a fresh rotation id, even when the same bytes are
+already among the retired records under an older id: that old id may be
+covered by a clean run from before this value's latest life, and only a
+new id makes `key forget` wait for a run after it. The value thus stays
+searchable there and is never silently dropped; `keys receive` lists each
+such value by name. Then it updates `files/`,
 and replaces `keys` last with an atomic rename, each step `fsync`ed and journalled like a
 rotation. An interrupted sync therefore leaves the old current value
 searchable on the destination, and the next run finishes or redoes it.
@@ -349,7 +352,11 @@ transform  [a-z0-9]+
 A placeholder has at most 4 transforms. Every form that a chain produces,
 including the intermediate ones, is at most 64 KiB. Longer chains are an
 error in the grammar check, and a form over the limit is an error for
-`expand`, `import` and check 6. Without these limits, `:b64` repeated many
+`expand`, `import` and check 6. The limit is for forms derived from a
+placeholder chain. The whole content of a secret file (6.5 check 6) is not
+capped: it and its transforms are searched with a streaming matcher, so a
+large file in `files/` (a PKCS#12 bundle, 12.8) neither fails the check nor
+is held in memory more than once per form. Without these limits, `:b64` repeated many
 times in a small file would grow the result exponentially and exhaust the
 memory of every hook and of the deploy machine.
 
@@ -485,8 +492,10 @@ imported as type `l`, never followed. The type and attributes are taken
 with `fstat` on the descriptor that is then read, so the bytes imported
 are those of the file that was checked.
 
-The final component may be a symlink only when the manifest declares it as
-type `l`: a configuration symlink imported earlier. It is never followed;
+On the repository side, the final component may already be a symlink only
+when the manifest declares it as type `l`: a configuration symlink
+imported earlier. A live symlink at a path the repository does not have yet
+is new and is simply created, as a type `l` entry with its attributes. It is never followed;
 it is read with `readlinkat`, and replaced, if the live link changed, by
 creating the new link under a temporary name with `symlinkat` and
 `renameat` over the old one, both relative to the parent descriptor. A
