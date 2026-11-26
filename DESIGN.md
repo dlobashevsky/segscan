@@ -80,9 +80,11 @@ input (see 6.6).
 
 ```
 ~/.secshell/<project>/     path from .sec/config, overridden by $SEGSCAN_KEYSTORE
-  keys                     name, uuid, value; mode 0600
+  keys                     name, uuid, scope, flags, value; mode 0600
   retired                  values replaced by key set, kept for check 6; mode 0600
   files/<name>             secrets that are whole files: .htpasswd, PEM keys, .env; mode 0600
+  files.meta               name, scope of each file in files/ (4.3); mode 0600
+  retired-files/           replaced or retired secret files, each with a .scope; mode 0700
 ```
 
 The directory and every file in it must be mode 0600 or 0700 and owned by
@@ -174,6 +176,16 @@ The scope and flags are the ones the key had then (6.2 `key retire`), so a
 weak retired value is still searched with its scope after the key has left
 `names`.
 `key set` does not drop the value it replaces: it appends it to `retired`.
+The order makes this survive a crash or power loss at any point. The old
+record is appended to `retired` (`O_APPEND`), and `retired` and the keystore
+directory are `fsync`ed. Only then is the new `keys` written to a temporary
+file in the same directory, `fsync`ed, renamed over `keys`, and the
+directory `fsync`ed again. A crash before the rename leaves the old value
+current and also in `retired`, which is harmless: it is searched twice. A
+rerun of `key set` does not append a record that `retired` already holds
+(same name, uuid and value), so recovery is just running it again. `import
+-secret` (below) and `key retire` follow the same rule: the retired copy is
+durable before the current one changes.
 An old value can still be live (the rotation is not deployed yet) and can
 still sit in commits made elsewhere that no `check --all` has seen. Check 6
 searches every form of every retired value like a current one, and reports
@@ -193,8 +205,20 @@ Secret files are kept the same way. When `import -secret <name>` replaces
 `retired-files/<name>.<UTC timestamp>.<n>`, created with `O_EXCL` and the
 next free `<n>`, so a second replacement on the same day or second never
 overwrites an earlier retired version
-(mode 0600). Check 6 searches it like a current secret file, and
-`key forget <name>` drops it under the same condition.
+(mode 0600). Its scope (6.5 check 6) is written next to it as
+`<name>.<UTC timestamp>.<n>.scope`; a retired name always ends in a
+number, so the two never collide. Check 6 searches it like a current secret
+file, and `key forget <name>` drops it under the same condition.
+
+`files.meta` holds the scope of each current file in `files/`, one
+`<name> TAB <scope>` line, written by `import -secret` and refreshed by
+`key set -meta <name>` like the scope of a key. `key check` reports a line
+that differs from the scope the manifest gives now. A secret file that no
+type `s` entry names any more is retired with `key retire -secret <name>`
+(6.2): the current file moves to `retired-files/` with the union of the
+scope in `files.meta`, the scope in the last commit whose manifest still
+named it, and any `-scope`. From there it leaves only through `key forget`
+with its clean-history gate.
 
 ### 4.4 `.sec/manifest`
 
@@ -345,7 +369,11 @@ key retire <name>                   move the current value of a key that is no l
                                     GLOB,... adds to it. Searching wider is only noisier, never
                                     a miss. If a form of the value is weak (6.5 check 6) and the
                                     union is empty, it refuses until -scope is given   (keystore)
-key forget <name>                   drop the retired values of a key (4.3)   (keystore)
+key retire -secret <name>           the same for a file in files/ that no type s entry names:
+                                    it moves to retired-files/ with its former scope (4.3),
+                                    durably before files/<name> is removed   (keystore)
+key forget <name>                   drop the retired values of a key, or the retired versions
+                                    of a secret file (4.3)   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
                                     -weak: values the cost model finds guessable   (keystore)
@@ -473,6 +501,23 @@ segscan expand [-n] -node <node> (-to <dir> | -install <root>) [path...]
 
 Needs the keystore.
 
+- It reads the repository side the way it writes the target side. Under
+  sudo the checkout belongs to the invoking user, who could replace a type
+  `f` file or one of its directories with a symlink to a root-only file
+  (`/etc/shadow`) after it was checked. So every input is opened from a
+  descriptor of the repository root with `openat2(RESOLVE_BENEATH |
+  RESOLVE_NO_SYMLINKS)` (otherwise one `openat(O_NOFOLLOW)` per component),
+  and the check is made with `fstat` on that descriptor: a type `f` entry
+  must be a regular file with one link (a hard link to another file is
+  refused), and a type `l` entry is read with `readlinkat` from its
+  directory's descriptor. The bytes that are expanded are the bytes read
+  from that descriptor. Every input is read this way into memory before the
+  first write, so nothing the user changes afterwards reaches the target.
+  `.sec/config`, `.sec/names` and `.sec/manifest` are read the same way,
+  here and by `manifest pull|apply`.
+  `expand` does not run `git` as root in a checkout owned by someone else:
+  its configuration (hooks, `core.fsmonitor`, filters) would run code as
+  root.
 - It resolves every placeholder in the selected files. Missing keys, uuid
   mismatches, malformed placeholders and unknown transforms are collected
   first and reported together. If there is any, nothing is written.
@@ -592,10 +637,10 @@ given in brackets:
    where a copy of the value is most likely to land. Several entries naming
    the same secret file give the union. A retired version keeps the scope
    the file had when it was retired, stored next to it in
-   `retired-files/<name>.<timestamp>.<n>.scope`. A file in `files/` that no
-   type `s` entry names has no scope; `key check` reports it, like an
-   unknown key, and its weak forms are not searched until it is named or
-   forgotten.
+   `retired-files/<name>.<timestamp>.<n>.scope` (4.3). A file in `files/`
+   that no type `s` entry names keeps the scope in `files.meta`, so its weak
+   forms are still searched there; `key check` reports it, like an unknown
+   key, until it is named again or retired with `key retire -secret`.
 
    The report names the key or secret file, the file and the line, never
    the value.
@@ -772,7 +817,12 @@ text.
   Check 6 does not use the strings. It searches the raw bytes, and the
   unpacked bytes, for every form of every value: as is, and in UTF-16LE.
   Values of any length are searched, so a short one is not lost between two
-  NUL bytes.
+  NUL bytes. The token rule for weak forms (6.5 check 6) is applied in the
+  encoding of the match. For a match as is, the neighbours are the bytes
+  before and after it. For a UTF-16LE match, they are the 16-bit code units
+  before and after it, at the match's own alignment, decoded as UTF-16LE;
+  the NUL high bytes of ASCII text are never treated as separators. So `0`
+  inside a UTF-16LE `0600` is not a token, just as in plain text.
 
   Unpacking that fails, or that hits a limit, leaves part of the file
   unread. For the statistical scanner that is a warning. For check 6 it is
