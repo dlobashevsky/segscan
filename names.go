@@ -163,9 +163,12 @@ func parseManifest(data []byte) ([]*mEntry, []lineProblem) {
 		check(e.Owner != "" && !strings.ContainsAny(e.Owner, " :"), "%s: bad owner %q", e.Path, e.Owner)
 		check(e.Group != "" && !strings.ContainsAny(e.Group, " :"), "%s: bad group %q", e.Path, e.Group)
 		secret := ""
+		attrSeen := map[string]bool{}
 		for _, a := range e.Attrs {
 			k, v, has := strings.Cut(a, "=")
 			check(has && k != "", "%s: bad attribute %q", e.Path, a)
+			check(!attrSeen[k], "%s: attribute %s given twice", e.Path, k)
+			attrSeen[k] = true
 			switch {
 			case k == "secret":
 				check(e.Type == "s", "%s: secret= is only for type s", e.Path)
