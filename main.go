@@ -485,9 +485,9 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 // fromIndex makes the hook follow the staged .sec/ files, not the working
 // tree: an unstaged edit of .sec/config (hook_scan = off), .sec/allow or the
 // model must not weaken the check of what is being committed. Flags given on
-// the command line still win. It returns the staged model (nil: none is
-// staged) and whether the hook must use it instead of any file on disk.
-func (c *common) fromIndex() (*Model, bool) {
+// the command line still win. It returns the staged model's bytes (nil: none
+// is staged) and whether the hook must use them instead of any file on disk.
+func (c *common) fromIndex() ([]byte, bool) {
 	for _, p := range []string{"config", "allow", "segscan.model"} {
 		out, _ := exec.Command("git", "-C", c.top, "ls-files", "-s", "-z", "--", secDir+"/"+p).Output()
 		for _, rec := range strings.Split(string(out), "\x00") {
@@ -525,11 +525,7 @@ func (c *common) fromIndex() (*Model, bool) {
 		return nil, false
 	}
 	if data, ok := show("segscan.model"); ok {
-		m, err := decodeModel(bytes.NewReader(data), "staged "+secDir+"/segscan.model")
-		if err != nil {
-			die(err)
-		}
-		return m, true
+		return data, true // decoded only if the scan runs (hook_scan may be off)
 	}
 	// No staged model: the built-in one only, never the working-tree file.
 	return nil, true
@@ -541,7 +537,7 @@ func cmdHook(args []string) {
 	fs.Parse(args)
 	c.fromStaged = true
 	c.finish(fs)
-	var staged *Model
+	var staged []byte
 	indexOnly := false
 	if c.sec != nil {
 		staged, indexOnly = c.fromIndex()
@@ -558,8 +554,12 @@ func cmdHook(args []string) {
 	path := modelPath(c.model)
 	var m *Model
 	var err error
-	if indexOnly {
-		m = staged
+	if indexOnly && staged != nil {
+		if m, err = decodeModel(bytes.NewReader(staged), "staged "+secDir+"/segscan.model"); err != nil {
+			die(err)
+		}
+	} else if indexOnly {
+		m = nil
 	} else {
 		m, err = loadModel(path)
 	}

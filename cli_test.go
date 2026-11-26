@@ -397,6 +397,18 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 	if _, errs, code := r.run("segscan", "hook"); code != 0 {
 		t.Errorf("hook read the unstaged model: exit %d\n%s", code, errs)
 	}
+	// hook_scan = off in the index: a broken staged model is not even read.
+	r.write(".sec/config", "hook_scan = off\n")
+	r.must("git", "add", "-f", ".sec/config", ".sec/segscan.model")
+	if _, errs, code := r.run("segscan", "hook"); code != 0 {
+		t.Errorf("hook_scan = off read the staged model: exit %d\n%s", code, errs)
+	}
+	r.write(".sec/config", "")
+	r.must("git", "add", ".sec/config")
+	if _, errs, code := r.run("segscan", "hook"); code != 2 {
+		t.Errorf("a broken staged model with the scan on: exit %d\n%s", code, errs)
+	}
+	r.must("git", "rm", "-q", "--cached", ".sec/segscan.model")
 	// Nor an unstaged broken config: the staged one is valid.
 	r.write(".sec/config", "colour = red\n")
 	if _, errs, code := r.run("segscan", "hook"); code != 0 {
