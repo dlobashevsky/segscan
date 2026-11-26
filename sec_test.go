@@ -217,6 +217,8 @@ func TestManifest(t *testing.T) {
 		"a\tf\t0644\troot\troot\tnoequals",
 		"a\tf\t0644\troot\troot\tsecret=k",
 		"a\tf\t0644\troot\troot\tselinuxx=x",
+		"a\tf\t0644\troot\troot\r",
+		"a\tf\t0644\troot\troot\xff",
 		"a\ts\t0600\troot\troot\tsecret=k\tsecret=j",
 		"a\tf\t0644\troot\troot\tacl=u:a:r\tacl=u:b:r",
 		"a\tf\t0644\troot\troot\txattr.=x",
@@ -260,5 +262,19 @@ func TestNewUUID(t *testing.T) {
 	a, b := newUUID(), newUUID()
 	if !isUUID([]byte(a), false) || a == b || a[14] != '4' || !strings.ContainsRune("89ab", rune(a[19])) {
 		t.Errorf("uuids %s %s", a, b)
+	}
+}
+
+// .sec/ files are UTF-8 with LF line ends: a CRLF line or invalid UTF-8 is
+// an error, not part of a group, a name or a config value.
+func TestSecFilesTextOnly(t *testing.T) {
+	if _, probs := parseNames([]byte("db_pass\t" + testUUID + "\r\n")); len(probs) == 0 {
+		t.Error("names accepted a CRLF line")
+	}
+	if _, probs := parseManifest([]byte("a\tf\t0644\troot\troot\r\n")); len(probs) == 0 {
+		t.Error("manifest accepted a CRLF line")
+	}
+	if _, err := parseSecConfig([]byte("hook_scan = warn\r\n"), "p"); err == nil {
+		t.Error("config accepted a CRLF line")
 	}
 }

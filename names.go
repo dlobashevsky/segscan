@@ -8,7 +8,21 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
+
+// textLineProblem reports what makes a line of a .sec/ file invalid text:
+// they are UTF-8 with LF line ends, so a CR (a CRLF file) or invalid UTF-8
+// would end up inside a name, an owner or a group.
+func textLineProblem(line string) string {
+	switch {
+	case strings.ContainsRune(line, '\r'):
+		return "carriage return in line (the file must use LF line ends)"
+	case !utf8.ValidString(line):
+		return "not valid UTF-8"
+	}
+	return ""
+}
 
 // ---------- names ----------
 
@@ -46,6 +60,10 @@ func parseNames(data []byte) (*nameList, []lineProblem) {
 	var probs []lineProblem
 	uuids := map[string]bool{}
 	for no, line := range strings.Split(string(data), "\n") {
+		if msg := textLineProblem(line); msg != "" {
+			probs = append(probs, lineProblem{no + 1, msg})
+			continue
+		}
 		if line == "" || line[0] == '#' {
 			continue
 		}
@@ -139,6 +157,10 @@ func parseManifest(data []byte) ([]*mEntry, []lineProblem) {
 	var probs []lineProblem
 	seen := map[string]bool{}
 	for no, line := range strings.Split(string(data), "\n") {
+		if msg := textLineProblem(line); msg != "" {
+			probs = append(probs, lineProblem{no + 1, msg})
+			continue
+		}
 		if line == "" || line[0] == '#' {
 			continue
 		}
