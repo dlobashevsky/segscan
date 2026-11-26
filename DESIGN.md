@@ -470,7 +470,8 @@ exists). The existing `install` command is unchanged and writes
 key add <name> [-scope GLOB,...] [-base58]
                                     new name + uuid in names; prints the placeholder   (no keystore)
 key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen: N chars of base58
-                                    from crypto/rand (the house standard for our own keys)   (keystore)
+                                    from crypto/rand (the house standard for our own keys); a value
+                                    outside the alphabet of 4.3 is refused   (keystore)
 key rm  <name>                      from names; refuses while a placeholder still uses it
 key retire <name>                   move the current value of a key that is no longer in names
                                     to retired (4.3), so it is still searched; key check reports
@@ -484,7 +485,8 @@ key forget -secret <name>           drop the retired versions of a secret file (
                                     both be called htpasswd), so every command that can act on
                                     either takes -secret for the file   (keystore)
 key list                            names, scopes, where each is used, and how often
-key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
+key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches,
+                                    values outside the alphabet of 4.3;
                                     -weak: keys whose value has weak forms, which check 6 does
                                     not search (4.3)   (keystore)
 keys sync <host>:<path>             copy the keystore with modes kept (ssh)   (keystore)
@@ -792,10 +794,8 @@ given in brackets:
      one, so `TOKEN=Zx81...` is found under another name. The value is
      taken as written, and also without one pair of surrounding `"..."` or
      `'...'`. Shell and dotenv escaping and inline comments are not
-     interpreted: `import -secret` refuses a `name=value` line whose value
-     holds a backslash, an inner quote, a ` #` or whitespace, and `key
-     check` reports such a line in a secret file already in `files/`
-     (12.9). Our values never need them.
+     interpreted (12.9): our secrets never need them, and a line that uses
+     them (`JAVA_OPTS="-Xmx1g -Xms1g"`) holds no secret to miss.
 
    An empty pattern (an empty or blank line, `OPTIONAL=`, `X=""`) is dropped
    before any transform: it holds no secret, and its forms (`sha256("")`)
@@ -848,9 +848,10 @@ because only the deploy machine runs check 6. The state holds:
   and every retired one. The set changes with the value, with a rotation,
   with a new transform chain in the repository, and with a segscan release
   that adds or changes a transform or the cost model, and any of these
-  counts as a change. A segscan release that changes how check 6 reads
-  files (encodings, containers) does not show in the digests: after
-  upgrading, run `check --all -full` once.
+  counts as a change. The state also records the segscan version that
+  wrote it; when another version reads it, the next `--all` checks the
+  whole history and no earlier run counts for `key forget`, since how
+  check 6 reads files (encodings, containers) may have changed.
   For every secret file, a digest of its name and of every form searched
   for it, again for the current version in `files/` and every retired one
   in `retired-files/`. A version that was current and retired again
@@ -970,10 +971,14 @@ by hand.
 
 ## 8. Binary files
 
-A file with a NUL in its first 8000 bytes is binary. A configuration
-repository holds few of them, so segscan does not try to understand every
-binary format; what it cannot read fully is refused, and keeping such a
-file is a visible decision in `.sec/allow` (12.9).
+A file with a NUL in its first 8000 bytes is binary for the statistical
+scanner. For check 6 the test is stricter and covers the whole file: any
+file that is not valid UTF-8 text, or holds a NUL anywhere, is binary, so a
+compressed payload behind a long text prefix (a self-extracting shell
+script) is treated as binary too. A configuration repository holds few
+such files, so segscan does not try to understand every binary format;
+what it cannot read fully is refused, and keeping such a file is a visible
+decision in `.sec/allow` (12.9).
 
 - `scan` and `hook` without `.sec/`: skipped, as now.
 - `check`, and `scan`/`hook` inside `.sec/` with `binary = scan`: the
@@ -1081,6 +1086,7 @@ and tests intact.
    LF, and our values have no spaces, quotes or escapes. So instead of
    handling CRLF, shell and dotenv quoting, or every binary format, segscan
    rejects what falls outside: `.sec/` files with CR or invalid UTF-8,
-   key values outside the alphabet of 4.3, secret-file lines that need
-   quoting rules, and binary files it cannot fully read (8), each of which
-   is either fixed or allowlisted on purpose.
+   key values outside the alphabet of 4.3, and binary files it cannot fully
+   read (8), each of which is either fixed or allowlisted on purpose.
+   Secret-file values are searched as written and unquoted, without
+   escaping rules.
