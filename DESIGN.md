@@ -80,11 +80,10 @@ input (see 6.6).
 
 ```
 ~/.secshell/<project>/     path from .sec/config, overridden by $SEGSCAN_KEYSTORE
-  keys                     name, uuid, scope, flags, value; mode 0600
+  keys                     name, uuid, value; mode 0600
   retired                  values replaced by key set, kept for check 6; mode 0600
   files/<name>             secrets that are whole files: .htpasswd, PEM keys, .env; mode 0600
-  files.meta               name, scope of each file in files/ (4.3); mode 0600
-  retired-files/           replaced or retired secret files, each with a .scope; mode 0700
+  retired-files/           replaced or retired secret files; mode 0700
   pending                  journal of a rotation in progress (4.3); mode 0600, absent normally
   lock                     flock target that serializes changes (4.3); mode 0600
 ```
@@ -101,8 +100,8 @@ root, so no keystore file is ever opened by path, for reading or writing:
   last component, and `fstat` on the descriptor must show a directory of
   mode 0700 owned by the invoking user. Root is not accepted for the
   directory itself, so `~/.secshell/<project> -> /root` is refused;
-- every file in it (`keys`, `retired`, `pending`, `lock`, `files.meta`,
-  `check.state`, `check.key`) and `files/` and `retired-files/` are opened from that
+- every file in it (`keys`, `retired`, `pending`, `lock`, `check.state`,
+  `check.key`) and `files/` and `retired-files/` are opened from that
   descriptor with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`
   (otherwise `openat(O_NOFOLLOW)`), and checked with `fstat` on the opened
   descriptor: a regular file (or directory), owner and mode as above, and
@@ -171,39 +170,37 @@ The file is kept sorted by name; `key add` and `key rm` rewrite it.
 ### 4.3 keystore `keys`
 
 ```
-<name> TAB <uuid> TAB <scope> TAB <flags> TAB <value>
+<name> TAB <uuid> TAB <value>
 ```
 
-`scope` is the union of every scope the key has had in `names` (4.2)
-while it held this value, possibly empty; `flags` are its current flags.
-`key set` with a new value starts the union afresh from the scope in
-`names`. `key check` reports a line whose scope does not cover the scope in
-`names`, or whose flags differ, and `key set -meta <name>` adds the current
-scope to the union and updates the flags without touching the value. It
-never narrows the union: the value may have been committed under the
-former scope, and when it is retired, check 6 must still search it there.
-These fields let `key retire` keep the right scope for a key that never
-reached a commit (6.2).
-
-The value is everything after the fourth TAB up to the end of the line,
+The value is everything after the second TAB up to the end of the line,
 byte for byte: it may contain spaces, `#` and TABs and is not trimmed. It
 cannot contain LF; a multi-line value is a file in `files/`. It cannot be
 empty either: an empty value would match at every byte. A line with an empty
 value is an error, and `key set` refuses one (`-gen N` needs N >= 1). Comment lines
 start with `#` in the first column. There are no requirements on the length
 or strength of a value, because values are often set by other tools or other
-teams. Weak values are reported by `key check -weak`, using the scanner's
-cost model.
+teams.
+
+segscan does not look for weak or default values (`admin`, `guest`,
+`password12345`). It exists to stop real keys from being committed, and a
+weak value cannot be told from ordinary text: `0` is in every `0600`,
+`admin` in every `admin_user`. Finding default and guessable credentials
+is a separate deploy-time task for other tools (dictionaries, existing
+leak scanners), not a commit or push blocker. What segscan does with weak
+values is only this:
+- check 6 searches the strong forms of every value and leaves out its
+  weak forms (6.5);
+- `import` never replaces a weak value blindly (6.3 step 5);
+- `key check -weak` lists the keys whose value has weak forms, so it is
+  visible which values check 6 cannot fully protect.
 
 `retired` has the same fields plus a rotation id and the time it was
 retired, before the value:
-`<name> TAB <uuid> TAB <scope> TAB <flags> TAB <rotation> TAB <time> TAB <value>`.
-The scope is the union from the `keys` line (and, for `key retire`, 6.2),
-so a weak retired value is still searched in every place it may have been
-committed after the key has left `names`. The rotation id is 128 random
-bits in hex, new for every retirement. The same value can be retired more
-than once (A, then B, then A again, then C); each retirement is its own
-record, with its own time and scope.
+`<name> TAB <uuid> TAB <rotation> TAB <time> TAB <value>`.
+The rotation id is 128 random bits in hex, new for every retirement. The
+same value can be retired more than once (A, then B, then A again, then C);
+each retirement is its own record, with its own time.
 `key set` does not drop the value it replaces: it appends it to `retired`.
 The order makes this survive a crash or power loss at any point:
 1. a journal, `pending` (mode 0600), is written with `O_EXCL` and `fsync`ed:
@@ -224,7 +221,7 @@ first finishes a `pending` it finds:
 it appends the record unless `retired` already holds that rotation id, then
 writes `keys` from the journal, then removes `pending`. The rotation id,
 not the value, is what tells a retry from a new retirement, so a value that
-comes back (A, B, A) is recorded again with its later time and scope. While
+comes back (A, B, A) is recorded again with its later time. While
 `pending` exists, `key set` refuses to start another rotation. `import
 -secret` (below), `key retire` and `key retire -secret` use the same journal:
 the retired copy is durable before the current one changes.
@@ -241,8 +238,8 @@ value). So `key forget` itself checks the retired forms against every
 commit reachable now that the qualifying run did not cover, and drops the
 value only if that comes out clean too. If any ref moved backwards or was
 rewritten, it runs the whole history again for those forms. So it does when
-the forms or scope of the retired value differ from those the qualifying
-run searched: the digest of 6.5 changes on an ordinary forward update too,
+the forms of the retired value differ from those the qualifying run
+searched: the digest of 6.5 changes on an ordinary forward update too,
 for instance when a new commit uses a transform chain no earlier commit
 did, and the commits that run covered were never searched for the new
 form. `key forget` compares the digest the run recorded with the current
@@ -253,33 +250,21 @@ rotation ids of every retired record it searched (6.5), and `key forget`
 requires that the qualifying run covered every rotation id the value has in
 `retired`. A value that was retired again after that run (A, B, A) has a
 new id the run never saw, so the old run does not count, however equal its
-forms and scope look.
+forms look.
 
 Secret files are kept the same way. When `import -secret <name>` replaces
 `files/<name>`, the old content moves to
 `retired-files/<name>.<UTC timestamp>.<n>`, created with `O_EXCL` and the
 next free `<n>`, so a second replacement on the same day or second never
 overwrites an earlier retired version
-(mode 0600). Its scope (6.5 check 6) is written next to it as
-`<name>.<UTC timestamp>.<n>.scope`; a retired name always ends in a
-number, so the two never collide. Check 6 searches it like a current secret
-file, and `key forget -secret <name>` drops it under the same condition.
-
-`files.meta` holds the scope of each current file in `files/`, one
-`<name> TAB <scope>` line, written by `import -secret` and widened by
-`key set -meta <name>` like the scope of a key: the union of every scope
-the manifest gave the file while it had this content, started afresh when
-`import -secret` replaces the content. `key check` reports a line whose
-scope does not cover the scope the manifest gives now; a wider one is the
-normal state after a move and is not reported. A secret file that no
-type `s` entry names any more is retired with `key retire -secret <name>`
-(6.2): the current file moves to `retired-files/` with the union of the
-scope in `files.meta`, the scopes its type `s` entries have in the
-manifest of every reachable commit that names it (all refs) and in the
-manifest of the snapshot being checked (index, working tree or each
-commit of a range), and any `-scope`. The same union is the scope check 6 uses for a current secret
-file. From there it leaves only through `key forget -secret`
-with its clean-history gate.
+(mode 0600). Check 6 searches it like a current secret file, and
+`key forget -secret <name>` drops it under the same condition. A secret
+file that no type `s` entry names any more is retired with
+`key retire -secret <name>` (6.2); until then `key check` reports it, like
+an unknown key, and check 6 still searches it. A file that is never
+deployed by segscan but must never enter the repository either (a
+PKCS#12 bundle deployed by hand) can be kept there on purpose (12.8). From `retired-files/` it
+leaves only through `key forget -secret` with its clean-history gate.
 
 ### 4.4 `.sec/manifest`
 
@@ -305,9 +290,6 @@ with its clean-history gate.
   before writing anything. A name the target does not know is an error, and
   nothing is changed.
 - `attr`: zero or more `k=v`:
-  - `scope=<glob>,...` for type `s`: where the weak forms of the secret
-    file are searched (6.5 check 6). Without it, the directory of the entry
-    and everything below it;
   - `secret=<name>` for type `s`. The name follows the key name grammar
     (4.2), so it is one path component and never `.` or `..`. The file is
     opened through a descriptor of the keystore directory, never by path:
@@ -423,17 +405,10 @@ key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen
 key rm  <name>                      from names; refuses while a placeholder still uses it
 key retire <name>                   move the current value of a key that is no longer in names
                                     to retired (4.3), so it is still searched; key check reports
-                                    such keys until then. The retired record keeps the key's
-                                    former scope and flags: the union of the scope in the
-                                    keystore line (4.3) and the key's scope in .sec/names of
-                                    every reachable commit that has it (all refs, not one
-                                    "last" commit: branches may differ); -scope GLOB,...
-                                    adds to it. Searching wider is only noisier, never
-                                    a miss. If a form of the value is weak (6.5 check 6) and the
-                                    union is empty, it refuses until -scope is given   (keystore)
+                                    such keys until then   (keystore)
 key retire -secret <name>           the same for a file in files/ that no type s entry names:
-                                    it moves to retired-files/ with its former scope (4.3),
-                                    durably before files/<name> is removed   (keystore)
+                                    it moves to retired-files/, durably before files/<name> is
+                                    removed   (keystore)
 key forget <name>                   drop the retired values of a key (4.3)   (keystore)
 key forget -secret <name>           drop the retired versions of a secret file (4.3). Keys and
                                     secret files are separate namespaces (a key and a file may
@@ -441,7 +416,8 @@ key forget -secret <name>           drop the retired versions of a secret file (
                                     either takes -secret for the file   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
-                                    -weak: values the cost model finds guessable   (keystore)
+                                    -weak: keys whose value has weak forms, which check 6 does
+                                    not search (4.3)   (keystore)
 keys sync <host>:<path>             copy the keystore with modes kept (ssh)   (keystore)
 ```
 
@@ -497,8 +473,11 @@ The steps:
    `check.state`. The state keeps every chain it has seen, so a chain
    removed in the very commit being checked (the staged change, or the
    first commit of a range) is still searched. Chains of three or four
-   are not all generated: 10^4 forms per value would make the search set
-   too large to keep for every key, so only those actually used count. A
+   are allowed by the grammar for configurations of our own tools, but
+   ordinary configurations need at most two (a sha256 passed through a
+   URL), so three and four are searched only when the repository uses
+   them; generating them all would multiply the search set for forms
+   nobody writes. A
    transform that cannot represent the value (5.2) gives no form and is
    left out of the set, here and in check 6; it is an error only where a
    placeholder asks for it (`expand`, the round trip). Forms are searched
@@ -506,12 +485,12 @@ The steps:
    replaced with the placeholder for that form. An occurrence outside the
    scope is an error: `import` stops, writes no file, and lists the places,
    because leaving it would put the value into the tree in clear. A weak
-   form (6.5 check 6) follows the same token-and-scope rule as in check 6:
-   it counts only as a whole token and only inside the key's scope.
-   Outside the scope it is not an occurrence at all, since `0` in `0600` or
-   `listen 0` says nothing about the key, so an unrelated file is imported
-   as it is. A key with a weak form and no scope is refused by `import` as
-   by `key check`. The strong forms of the same value (`sha256("0")`) are
+   form (shorter than 8 bytes, or cheap under the cost model; 4.3) counts
+   only as a whole token, with no letter, digit, `_` or `-` on either side,
+   and only inside the key's scope. Outside the scope it is not an
+   occurrence at all, since `0` in `0600` or `listen 0` says nothing about
+   the key, so an unrelated file is imported as it is. Where it does count,
+   step 5 applies. The strong forms of the same value (`sha256("0")`) are
    still errors anywhere outside the scope.
 2. If two keys produce the same form, or a form of one key occurs inside
    a form of another (`abc` and `abcdef`), that is an error naming both
@@ -692,63 +671,31 @@ given in brackets:
    detector; an allowlisted fp is respected).
 6. **Known values** (`known_value`; only when the keystore is available).
    No value of any key occurs, in any form from 6.3 step 1, in a text file
-   or anywhere in the bytes of a binary file (8). Weakness is judged per
-   form, not per key: a form shorter than 8 bytes or cheap under the cost
-   model (as in 6.3 step 5) would match ordinary text everywhere (`0` in
-   every `0600`), so it is searched only as a whole token, with no letter,
-   digit, `_` or `-` on either side, and only inside the key's scope. That
-   scope is the union of the scope in the keystore line (4.3) and the key's
-   scope in `.sec/names` of every reachable commit (all refs, as `--all`
-   walks them) and of the snapshot being checked itself (the index for
-   `--staged`, the working tree, each commit of a range), not of one branch
-   or one "last" commit. A staged change that widens a scope is therefore
-   searched in its new paths by the very pre-commit check that sees it: a value may have
-   been committed on any branch under the scope that branch gives. A
-   retired record adds its own stored scope. The union is part of the
-   digest (below), so a branch that widens a scope makes the key be checked
-   against the whole history again. The
-   other forms of the same value, such as `sha256("0")`, are distinctive and
-   are searched everywhere, like any strong value. A key with a weak form
-   must therefore have a scope; `key check` reports one that has none, and
-   so does check 6. This restricts where a weak form is looked for, not what
-   the value may be. No secret file from
-   `files/` is in the repository, under any path:
+   or anywhere in the bytes of a binary file (8). Only strong forms are
+   searched: a form shorter than 8 bytes or cheap under the cost model (as
+   in 6.3 step 5) would match ordinary text everywhere (`0` in every
+   `0600`) and is left out (4.3: weak and default values are not segscan's
+   task). Weakness is judged per form, not per key, so the distinctive
+   forms of a weak value, such as `sha256("admin")`, are still searched
+   everywhere. Scopes play no part here: a strong form is a finding under
+   any path. No secret file from `files/` is in the repository, under any
+   path:
    - a file that contains the whole content of a (non-empty) secret file anywhere, as
      a substring of its raw or unpacked bytes, is a finding. Equality alone
      would miss a secret file with only short lines (`abc123\nxyz789`)
-     that was embedded in another file or had a byte appended;
-   - so is a file that contains a line of one. Every line of a secret file
-     whose text, trimmed of spaces, is at least 8 bytes counts. Shorter lines
-     are too common (`}`, `[main]`) to tell anything;
-   - so is a file that contains the value part of a `name=value` line. When
-     the name looks like a credential (it contains `pass`, `pwd`, `secret`,
-     `token`, `key`, `auth` or `cred`, the scanner's keyword list), the
-     value counts at any length, like a keystore value, so `TOKEN=abc123`
-     is found under another name. Other values count from 8 bytes, because
-     `PORT=8080` or `DEBUG=true` would match everywhere. An empty value
-     (`TOKEN=`) is never searched.
+     that was embedded in another file or had a byte appended. This also
+     covers binary secret files such as a PKCS#12 bundle;
+   - so is a file that contains a line of one: every line of a text secret
+     file that is, trimmed of spaces, a strong form by the rule above
+     (`}` or `[main]` would match everywhere);
+   - so is a file that contains the value part of a `name=value` line of
+     one, under the same rule, so `TOKEN=Zx81...` is found under another
+     name. `PORT=8080`, `DEBUG=true` and `TOKEN=abc` are not searched.
 
    Like a keystore value, every such pattern (the whole content, each
    counted line, each counted value) is searched under each single
    transform of 5.2 and the chains used in the repository (6.3 step 1),
-   so a base64 or sha256 form of `abc123` from `app.env` is found too.
-   Weak forms follow the token rule above. The type `s` paths themselves
-   never exist in the tree (check 3), so the scope of a secret file is
-   something else: the `scope=GLOB,...` attribute of its type `s` entries
-   (4.4), or, for an entry without one, the directory of the entry and
-   everything below it (`nodes/n1/etc/app/**` for `nodes/n1/etc/app/app.env`),
-   where a copy of the value is most likely to land. Several entries naming
-   the same secret file give the union, and so do the type `s` entries
-   naming it in the manifest of every reachable commit and of the snapshot
-   being checked (so a staged entry that widens the scope counts in the
-   very check that sees it), and the scope in `files.meta` (4.3): a file
-   whose entry moved from one directory to another keeps being searched in
-   the old one too, where an earlier commit may have it. A retired version keeps the scope
-   the file had when it was retired, stored next to it in
-   `retired-files/<name>.<timestamp>.<n>.scope` (4.3). A file in `files/`
-   that no type `s` entry names keeps the scope in `files.meta`, so its weak
-   forms are still searched there; `key check` reports it, like an unknown
-   key, until it is named again or retired with `key retire -secret`.
+   so a base64 or sha256 form of a line from `app.env` is found too.
 
    The report names the key or secret file, the file and the line, never
    the value.
@@ -782,19 +729,13 @@ because only the deploy machine runs check 6. The state holds:
   after a retirement;
 - for every key, a digest of its name, its uuid and the complete sorted set
   of forms that check 6 searches for it (6.3 step 1), for the current value
-  and every retired one, together with its scope and which of its forms are
-  weak. Widening the scope, or a form becoming weak or strong, therefore
-  also counts as a change, and the key is checked against the whole history
-  in the paths it now covers. The set changes with the value, with a rotation,
+  and every retired one. The set changes with the value, with a rotation,
   with a new transform chain in the repository, and with a segscan release
-  that adds or changes a transform, and any of these counts as a change.
+  that adds or changes a transform or the cost model, and any of these
+  counts as a change.
   For every secret file, a digest of its name and of every form searched
   for it, again for the current version in `files/` and every retired one
-  in `retired-files/`, together with its scope (the `scope=` attributes and
-  entry directories of its type `s` entries and the scope in `files.meta`,
-  6.5 check 6) and which of its forms are weak. A new type `s` entry naming an existing secret file
-  therefore changes the digest, and the file is checked against the whole
-  history in the paths it now covers. A version that was current and retired again
+  in `retired-files/`. A version that was current and retired again
   between two clean runs (A, then B, then C) is still part of the set, so
   it is checked against the whole history like C. All digests are HMAC-SHA256 under a random
   256-bit key kept in its own file, `check.key` (mode 0600), not in
@@ -926,14 +867,9 @@ text.
   offset in the `col` field. The length limits apply to it only.
 
   Check 6 does not use the strings. It searches the raw bytes, and the
-  unpacked bytes, for every form of every value: as is, and in UTF-16LE.
-  Values of any length are searched, so a short one is not lost between two
-  NUL bytes. The token rule for weak forms (6.5 check 6) is applied in the
-  encoding of the match. For a match as is, the neighbours are the bytes
-  before and after it. For a UTF-16LE match, they are the 16-bit code units
-  before and after it, at the match's own alignment, decoded as UTF-16LE;
-  the NUL high bytes of ASCII text are never treated as separators. So `0`
-  inside a UTF-16LE `0600` is not a token, just as in plain text.
+  unpacked bytes, for every strong form of every value (6.5 check 6): as
+  is, and in UTF-16LE. The strings' length limits do not apply, so a value
+  is not lost between two NUL bytes.
 
   Unpacking that fails, or that hits a limit, leaves part of the file
   unread. For the statistical scanner that is a warning. For check 6 it is
@@ -1005,3 +941,15 @@ and tests intact.
 4. Our own keys are always base58 from a random source (`key set -gen`).
    Values set by external tools may be anything (4.3).
 5. `check --all` keeps incremental state in the keystore (6.5).
+6. Transform chains: configurations need at most two (a sha256 passed
+   through a URL); three and four exist only for our own tools. Single
+   transforms and pairs are always searched, longer chains only when the
+   repository uses them (6.3 step 1).
+7. Weak and default values (`admin`, `password12345`) are not segscan's
+   task. segscan blocks commits of real keys; finding default credentials
+   is a deploy-time job for other tools. Check 6 searches strong forms
+   only, and `import` only refuses to replace a weak value blindly (4.3).
+8. Long secret files that are deployed by hand (a PKCS#12 bundle for
+   S/MIME) never enter the repository. Putting one into `files/` without a
+   type `s` entry makes check 6 search for it; `key check` lists it as
+   unnamed, which is expected for such a file.
