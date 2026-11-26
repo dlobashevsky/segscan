@@ -275,8 +275,9 @@ normal state after a move and is not reported. A secret file that no
 type `s` entry names any more is retired with `key retire -secret <name>`
 (6.2): the current file moves to `retired-files/` with the union of the
 scope in `files.meta`, the scopes its type `s` entries have in the
-manifest of every reachable commit that names it (all refs), and any
-`-scope`. The same union is the scope check 6 uses for a current secret
+manifest of every reachable commit that names it (all refs) and in the
+manifest of the snapshot being checked (index, working tree or each
+commit of a range), and any `-scope`. The same union is the scope check 6 uses for a current secret
 file. From there it leaves only through `key forget -secret`
 with its clean-history gate.
 
@@ -512,8 +513,15 @@ The steps:
    as it is. A key with a weak form and no scope is refused by `import` as
    by `key check`. The strong forms of the same value (`sha256("0")`) are
    still errors anywhere outside the scope.
-2. If two keys produce the same form, that is an error naming both keys,
-   because the placeholder cannot be chosen.
+2. If two keys produce the same form, or a form of one key occurs inside
+   a form of another (`abc` and `abcdef`), that is an error naming both
+   keys, because the placeholder cannot be chosen: longest first would
+   take `abcdef` even where the live file has key `abc` followed by the
+   literal `def`, the round trip would still pass, and the next rotation
+   would expand the wrong key and change the bytes after it. Weak forms
+   take part only where they match as tokens (step 1); a form that is
+   contained in another only as a token-internal substring is not an
+   overlap.
 3. Forms of one key can be equal too: an alphanumeric value is unchanged by
    `urlenc`, `xml`, `sq`, `dq` and `nginxq`. The text then does not say
    which transform the place needs, and a wrong choice would only show
@@ -726,10 +734,12 @@ Blocking checks (exit 1):
    (4.4), or, for an entry without one, the directory of the entry and
    everything below it (`nodes/n1/etc/app/**` for `nodes/n1/etc/app/app.env`),
    where a copy of the value is most likely to land. Several entries naming
-   the same secret file give the union, and so does the scope in
-   `files.meta` (4.3): a file whose entry moved from one directory to
-   another keeps being searched in the old one too, where an earlier commit
-   may have it. A retired version keeps the scope
+   the same secret file give the union, and so do the type `s` entries
+   naming it in the manifest of every reachable commit and of the snapshot
+   being checked (so a staged entry that widens the scope counts in the
+   very check that sees it), and the scope in `files.meta` (4.3): a file
+   whose entry moved from one directory to another keeps being searched in
+   the old one too, where an earlier commit may have it. A retired version keeps the scope
    the file had when it was retired, stored next to it in
    `retired-files/<name>.<timestamp>.<n>.scope` (4.3). A file in `files/`
    that no type `s` entry names keeps the scope in `files.meta`, so its weak
