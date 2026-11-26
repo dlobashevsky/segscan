@@ -496,14 +496,15 @@ Blocking checks (exit 1):
    type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
    Owner and group must not be empty. Whether they exist on the node is
    checked on install (4.4).
-4. **Forbidden paths.** No path in the checked snapshot (working tree,
-   index, or each commit of the range or history) matches `forbid`, the
-   keystore path or `.sec/keys`.
-5. **Private keys.** No `PRIVATE KEY` block (the existing detector).
-6. **Known values** (only when the keystore is available). No value of any
-   key occurs, in any form from 6.3 step 1, in a text file or anywhere in the
-   bytes of a binary file (8). No secret file from `files/` is in the
-   repository, under any path:
+4. **Forbidden paths** (`forbidden`). No path in the checked snapshot
+   (working tree, index, or each commit of the range or history) matches
+   `forbid`, the keystore path or `.sec/keys`.
+5. **Private keys** (`private_key`). No `PRIVATE KEY` block (the existing
+   detector; an allowlisted fp is respected).
+6. **Known values** (`known_value`; only when the keystore is available).
+   No value of any key occurs, in any form from 6.3 step 1, in a text file
+   or anywhere in the bytes of a binary file (8). No secret file from
+   `files/` is in the repository, under any path:
    - a file that contains the whole content of a (non-empty) secret file anywhere, as
      a substring of its raw or unpacked bytes, is a finding. Equality alone
      would miss a secret file with only short lines (`abc123\nxyz789`)
