@@ -479,7 +479,9 @@ The steps:
    no transform, under each single transform in 5.2, and under every
    chain of two transforms (every ordered pair from 5.2, generated whether
    or not a placeholder uses it), and under every longer chain used for that
-   key in the tree being imported into and, for check 6, in any of: the commits the check covers, `HEAD`, the
+   key in the tree being imported into and, for check 6, in any of: the
+   snapshot being checked (the index for `--staged`, the working tree), the
+   commits the check covers, `HEAD`, the
    commits a range excludes (its base), and the chains recorded in
    `check.state`. The state keeps every chain it has seen, so a chain
    removed in the very commit being checked (the staged change, or the
@@ -693,24 +695,25 @@ Blocking checks (exit 1):
    any path. No secret file from `files/` is in the repository, under any
    path:
    - a file that contains the whole content of a (non-empty) secret file anywhere, as
-     a substring of its raw or unpacked bytes, is a finding, if that
-     content is a strong form by the rule above. A secret file whose whole
-     content is weak (`true`, `0`) is reported by `key check -weak` like a
-     weak key and not searched as a whole. Equality alone
+     a substring of its raw or unpacked bytes, is a finding. Equality alone
      would miss a secret file with only short lines (`abc123\nxyz789`)
      that was embedded in another file or had a byte appended. This also
      covers binary secret files such as a PKCS#12 bundle;
-   - so is a file that contains a line of one: every line of a text secret
-     file that is, trimmed of spaces, a strong form by the rule above
-     (`}` or `[main]` would match everywhere);
+   - so is a file that contains a line of one (trimmed of spaces);
    - so is a file that contains the value part of a `name=value` line of
-     one, under the same rule, so `TOKEN=Zx81...` is found under another
-     name. `PORT=8080`, `DEBUG=true` and `TOKEN=abc` are not searched.
+     one, so `TOKEN=Zx81...` is found under another name.
+
+   Each of these patterns is searched only in its strong forms (below), so
+   `}`, `[main]`, `PORT=8080` or `DEBUG=true` match nothing by themselves.
 
    Like a keystore value, every such pattern (the whole content, each
-   counted line, each counted value) is searched under each single
+   line, each value) is turned into its forms first, under each single
    transform of 5.2 and the chains used in the repository (6.3 step 1),
-   so a base64 or sha256 form of a line from `app.env` is found too.
+   and the strength rule is applied to each form, not to the pattern: a
+   secret file that holds only `0` is not searched as `0`, but its
+   `sha256("0")` form is, and so a base64 or sha256 form of a line from
+   `app.env` is found too. A secret file whose every form of its whole
+   content is weak is reported by `key check -weak` like a weak key.
 
    The report names the key or secret file, the file and the line, never
    the value.
@@ -737,7 +740,11 @@ because only the deploy machine runs check 6. The state holds:
   and every retired one. The set changes with the value, with a rotation,
   with a new transform chain in the repository, and with a segscan release
   that adds or changes a transform or the cost model, and any of these
-  counts as a change.
+  counts as a change. Every digest also covers the version of the exact
+  search itself (`scan_version`, raised with every release that changes
+  which encodings are searched or which containers are unpacked, such as
+  UTF-16BE or a new unpacker), so such a release makes every key and secret
+  file be checked against the whole history again.
   For every secret file, a digest of its name and of every form searched
   for it, again for the current version in `files/` and every retired one
   in `retired-files/`. A version that was current and retired again
