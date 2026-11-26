@@ -143,7 +143,10 @@ searchable on the destination, and the next run finishes or redoes it.
 
 ## 4. File formats
 
-All files are UTF-8 text with LF line ends, with two exceptions: the value
+The files segscan defines (everything in `.sec/` and in the keystore) are
+UTF-8 text with LF line ends; the configuration files of the nodes in the
+tree are whatever their programs expect, binary included (8). Of segscan's
+own files there are two exceptions: the value
 field of the keystore's `keys` and `retired` is any bytes except LF (4.3),
 while their names, uuids and dates are UTF-8 like everything else; and the
 secret files in `files/` and `retired-files/` are opaque bytes, binary
@@ -274,7 +277,12 @@ the leak is still there and the retired value is what keeps finding it.
 Refs can also move after that run (a fetch brings a commit with the old
 value). So `key forget` itself checks the retired forms against every
 commit reachable now that the qualifying run did not cover, and drops the
-value only if that comes out clean too. If any ref moved backwards or was
+value only if that comes out clean too. Commits that exist only on a
+remote are not reachable here and would never be searched, so before
+anything else `key forget` lists every ref of every configured remote
+(`git ls-remote`) and refuses, naming them, while any advertised object is
+missing locally; the user fetches, and the fetched commits are then
+covered like any other. If any ref moved backwards or was
 rewritten, it runs the whole history again for those forms. So it does when
 the forms of the retired value differ from those the qualifying run
 searched: the digest of 6.5 changes on an ordinary forward update too,
@@ -330,7 +338,10 @@ leaves only through `key forget -secret` with its clean-history gate.
   before writing anything. A name the target does not know is an error, and
   nothing is changed.
 - `attr`: zero or more `k=v`:
-  - `secret=<name>` for type `s`. The name follows the key name grammar
+  - `secret=<name>`: required, exactly once, on every type `s` entry, and
+    allowed on no other type (check 3 reports a missing, repeated or
+    misplaced one, so `expand` never meets an `s` entry without a source).
+    The name follows the key name grammar
     (4.2), so it is one path component and never `.` or `..`. The file is
     opened through a descriptor of the keystore directory, never by path:
     `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` on Linux 5.6 and
@@ -762,8 +773,10 @@ given in brackets:
      one, so `TOKEN=Zx81...` is found under another name. The value is
      taken both as written and as the shell and dotenv conventions read it:
      an inline comment outside quotes (` # ...`) cut off first, then
-     surrounding `"..."` or `'...'` removed, and inside double quotes the
-     escapes `\"`, `\\`, `\$` and `\n` undone, so `TOKEN="Zx81..." # prod`
+     surrounding `"..."` or `'...'` removed, inside double quotes the
+     escapes `\"`, `\\`, `\$` and `\n` undone, and outside quotes a
+     backslash taken as escaping the next character (`TOKEN=Zx81\ value`
+     gives `Zx81 value`), so `TOKEN="Zx81..." # prod`
      is also found as the bare `Zx81...` copied elsewhere.
 
    An empty pattern (an empty or blank line, `OPTIONAL=`, `X=""`) is dropped
