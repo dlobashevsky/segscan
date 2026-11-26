@@ -293,3 +293,20 @@ func TestDefaultExcludesSec(t *testing.T) {
 		}
 	}
 }
+
+func TestSecConfigScanThresholds(t *testing.T) {
+	cfg, err := parseSecConfig([]byte("scan_bpc = 4.5\nscan_minlen = 12\n"), "p")
+	if err != nil || cfg.ScanBpc != 4.5 || cfg.ScanMinLen != 12 {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+	for _, bad := range []string{"scan_bpc = 0", "scan_bpc = 9", "scan_bpc = x", "scan_minlen = 0", "scan_minlen = 1.5"} {
+		if _, err := parseSecConfig([]byte(bad+"\n"), "p"); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	a := &allowList{fp: map[string]bool{}}
+	a.add([]byte("path:data/**/*.json\n"))
+	if !a.skipPath("data/ban/x/streets.json") || a.skipPath("other/streets.json") {
+		t.Error("** in path:")
+	}
+}

@@ -163,6 +163,8 @@ roots       = nodes/*          # where a node tree starts: nodes/n1/etc/... -> /
 skip_uuids  = all              # all | placeholders | off   (5.3)
 binary      = scan             # scan | skip: binary files in check/hook (8)
 hook_scan   = warn             # warn | block | off: the statistical part of the hook
+scan_bpc    = 4.5              # statistical scan: minimum bits per char (-bpc wins); unset: no limit
+scan_minlen = 12               # statistical scan: minimum length (-minlen wins); unset: 6
 forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never be committed
 ```
 

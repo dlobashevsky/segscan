@@ -176,6 +176,9 @@ func (a *allowList) skipPath(p string) bool {
 		if strings.HasSuffix(pat, "/") && strings.HasPrefix(p, pat) {
 			return true
 		}
+		if strings.Contains(pat, "**") && matchPath(pat, p) {
+			return true
+		}
 	}
 	return false
 }

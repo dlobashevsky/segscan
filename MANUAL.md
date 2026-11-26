@@ -183,6 +183,8 @@ Every form a chain produces is at most 64 KiB.
     skip_uuids  = all
     binary      = scan
     hook_scan   = warn
+    scan_bpc    = 4.5
+    scan_minlen = 12
     forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*, id_ecdsa*
 
 | Key | Meaning |
@@ -193,6 +195,8 @@ Every form a chain produces is at most 64 KiB.
 | `skip_uuids` | `all` (placeholders and bare UUIDs are not scored by the statistical scan), `placeholders`, `off` |
 | `binary` | `scan` or `skip`, for the statistical scan (stage 5); check 6 always reads binary files |
 | `hook_scan` | the statistical part of the pre-commit hook: `warn` (print, do not block), `block`, `off` |
+| `scan_bpc` | statistical scan (`scan`, `diff`, `hook`, `calib`): report only findings with at least this many bits per char; `-bpc` wins. Our base58 keys score 5 and more; pick the value from the `bits_per_char` column of `segscan scan` on your repository. Default: no limit |
+| `scan_minlen` | statistical scan: ignore random-looking strings shorter than this; `-minlen` wins. Short demo passwords go with 10-12. Default 6 |
 | `forbid` | globs of paths that may never be committed |
 
 `#` starts a comment at the beginning of a line or after a space or TAB.
@@ -452,12 +456,26 @@ structured, validated by `check`, and full of paths and uuids.
 False positives:
 
 - add the `fp` column of the finding to `.sec/allow`, one per line;
-- `path:<glob>` in `.sec/allow` skips files;
+- `path:<glob>` in `.sec/allow` skips whole files: `path:*.json` by name
+  anywhere, `path:data/ban/` everything below a directory,
+  `path:data/**/*.csv` with `**` for any depth. Use it for files full of
+  ids (a list of UUIDs, a dump with alphanumeric codes). It does not hide
+  anything from check 6: known values are searched there too;
 - `segscan:allow` on a line skips that line.
 
 `segscan train` with the keystore available first runs check 6 on its
 input and stops on any finding, so a value never becomes a dictionary word
 of the model.
+
+The model, `.sec/segscan.model`, is committed with the rest of `.sec/`, so
+every clone and every hook scores the same way; the hook reads the staged
+one. It holds no text of the files, only letter statistics and a
+dictionary of lowercase letter fragments seen at least 3 times in at least
+2 files; long fragments that look random are kept out of it. Train only on
+a tree that is already clean (placeholders in, no live values): a secret
+that is in the corpus several times could otherwise become a word and
+score low. Retrain when the repository has grown, and commit the new
+model. `-m` or `$SEGSCAN_MODEL` point elsewhere for a one-off.
 
 Useful one-offs on a repository you take over:
 

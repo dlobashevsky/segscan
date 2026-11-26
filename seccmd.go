@@ -22,6 +22,8 @@ roots       = nodes/*
 skip_uuids  = all
 binary      = scan
 hook_scan   = warn
+# scan_bpc    = 4.5          # statistical scan: report only findings of at least N bits per char
+# scan_minlen = 12           # statistical scan: ignore shorter random-looking strings
 forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*, id_ecdsa*
 `
 
