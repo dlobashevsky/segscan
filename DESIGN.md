@@ -662,6 +662,11 @@ given in brackets:
    inside its scope.
 3. **Manifest** (`manifest`). Every file under a node root has a manifest entry, and every
    type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
+   No entry lies below an entry of type `f` or `s` (`etc/credential` and
+   `etc/credential/token`): an ancestor must be a directory (`d`, or a
+   directory the tree implies) or a declared link (`l`). `expand` repeats
+   this on the resolved targets before the first write, so an install never
+   stops halfway on a path that cannot be both a file and a directory.
    Owner and group must not be empty. Whether they exist on the node is
    checked on install (4.4).
 4. **Forbidden paths** (`forbidden`). No path in the checked snapshot
@@ -872,7 +877,8 @@ text.
 
   Check 6 does not use the strings. It searches the raw bytes, and the
   unpacked bytes, for every strong form of every value (6.5 check 6): as
-  is, and in UTF-16LE. The strings' length limits do not apply, so a value
+  is, in UTF-16LE and in UTF-16BE (a BOM changes nothing: the form is
+  searched anywhere in the bytes). The strings' length limits do not apply, so a value
   is not lost between two NUL bytes.
 
   Unpacking that fails, or that hits a limit, leaves part of the file
