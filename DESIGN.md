@@ -274,8 +274,10 @@ scope does not cover the scope the manifest gives now; a wider one is the
 normal state after a move and is not reported. A secret file that no
 type `s` entry names any more is retired with `key retire -secret <name>`
 (6.2): the current file moves to `retired-files/` with the union of the
-scope in `files.meta`, the scope in the last commit whose manifest still
-named it, and any `-scope`. From there it leaves only through `key forget -secret`
+scope in `files.meta`, the scopes its type `s` entries have in the
+manifest of every reachable commit that names it (all refs), and any
+`-scope`. The same union is the scope check 6 uses for a current secret
+file. From there it leaves only through `key forget -secret`
 with its clean-history gate.
 
 ### 4.4 `.sec/manifest`
@@ -421,10 +423,11 @@ key rm  <name>                      from names; refuses while a placeholder stil
 key retire <name>                   move the current value of a key that is no longer in names
                                     to retired (4.3), so it is still searched; key check reports
                                     such keys until then. The retired record keeps the key's
-                                    former scope and flags: the union of the scopes in the
-                                    keystore line (4.3) and in the last commit whose
-                                    .sec/names still has the key, if there is one; -scope
-                                    GLOB,... adds to it. Searching wider is only noisier, never
+                                    former scope and flags: the union of the scope in the
+                                    keystore line (4.3) and the key's scope in .sec/names of
+                                    every reachable commit that has it (all refs, not one
+                                    "last" commit: branches may differ); -scope GLOB,...
+                                    adds to it. Searching wider is only noisier, never
                                     a miss. If a form of the value is weak (6.5 check 6) and the
                                     union is empty, it refuses until -scope is given   (keystore)
 key retire -secret <name>           the same for a file in files/ that no type s entry names:
@@ -592,9 +595,18 @@ Needs the keystore.
 - `-to <dir>`: writes the files under `dir` mode 0600, directories 0700.
   `dir` must be outside the repository. This is for review and for deploy
   tools that copy files themselves. The writes use the same descriptor walk
-  as `import` (6.3), beneath `dir` and with no symlink followed, so an
-  existing `dir/etc -> ~/.ssh` cannot redirect them. Symlinks of the
-  configuration (type `l`) are created as symlinks.
+  as `import` (6.3), beneath `dir`, so an existing `dir/etc -> ~/.ssh`
+  cannot redirect them. Symlinks of the configuration (type `l`) are
+  created as symlinks, and a declared link that entries lie beneath is
+  followed by the same rule as for `-install` below, with `dir` as the
+  root: the link must be the one `-to` created, or an existing one with
+  exactly the declared target, and it must resolve beneath `dir`. A
+  declared target that leaves `dir` (an absolute `/etc/...` link, as on the
+  host) cannot be followed inside the staging tree, so its descendants are
+  written at the path the link resolves to on the node, mapped under `dir`
+  (`dir/etc/nginx/...` for a link to `/etc/nginx`), and the link itself is
+  still created. The staging tree then holds every entry, and nothing is
+  ever written outside `dir`.
 - `-install <root>` (usually `/`, under sudo) never writes through a symlink
   it was not told about. Every existing component below `<root>` on the way
   to a target must be a plain directory, or a symlink that the manifest of
@@ -667,7 +679,14 @@ Blocking checks (exit 1):
    form, not per key: a form shorter than 8 bytes or cheap under the cost
    model (as in 6.3 step 5) would match ordinary text everywhere (`0` in
    every `0600`), so it is searched only as a whole token, with no letter,
-   digit, `_` or `-` on either side, and only inside the key's scope. The
+   digit, `_` or `-` on either side, and only inside the key's scope. That
+   scope is the union of the scope in the keystore line (4.3) and the key's
+   scope in `.sec/names` of every reachable commit (all refs, as `--all`
+   walks them), not of one branch or one "last" commit: a value may have
+   been committed on any branch under the scope that branch gives. A
+   retired record adds its own stored scope. The union is part of the
+   digest (below), so a branch that widens a scope makes the key be checked
+   against the whole history again. The
    other forms of the same value, such as `sha256("0")`, are distinctive and
    are searched everywhere, like any strong value. A key with a weak form
    must therefore have a scope; `key check` reports one that has none, and
