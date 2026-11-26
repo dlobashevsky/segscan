@@ -580,3 +580,15 @@ func TestCLIManifestFixKeepsTargetEntries(t *testing.T) {
 		t.Errorf("manifest after fix:\n%s\n%s", m, errs)
 	}
 }
+
+// No manifest entry may lie below an f or s entry.
+func TestCLIManifestEntryBelowFile(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	r.write(".sec/manifest", manifestHeader+
+		"nodes/n1/etc/credential\ts\t0600\troot\troot\tsecret=cred\n"+
+		"nodes/n1/etc/credential/token\ts\t0600\troot\troot\tsecret=token\n")
+	if out, _, code := r.run("segscan", "check"); code != 1 || !strings.Contains(out, "nodes/n1/etc/credential/token lies below nodes/n1/etc/credential, which is type s") {
+		t.Errorf("entry below an s entry: exit %d\n%s", code, out)
+	}
+}

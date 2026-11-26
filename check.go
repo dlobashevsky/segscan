@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -477,6 +478,14 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 			}
 			if (e.Type == "f" || e.Type == "l") && s.byPath[e.Path] == nil {
 				add(manPath, e.Line, 0, ckManifest, "%s: no such file", e.Path)
+			}
+			// An ancestor must be a directory or a declared link: a path
+			// cannot be both a file and a directory on the target.
+			for dir := path.Dir(e.Path); dir != "." && dir != "/"; dir = path.Dir(dir) {
+				if a := man[dir]; a != nil && (a.Type == "f" || a.Type == "s") {
+					add(manPath, e.Line, 0, ckManifest, "%s lies below %s, which is type %s", e.Path, dir, a.Type)
+					break
+				}
 			}
 		}
 	}
