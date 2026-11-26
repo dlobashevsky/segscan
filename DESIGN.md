@@ -143,6 +143,11 @@ hook_scan   = warn             # warn | block | off: the statistical part of the
 forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never be committed
 ```
 
+The keystore path (from `keystore` or `$SEGSCAN_KEYSTORE`) may not contain
+`.` or `..` components: a path that climbs out of the repository and back
+in could land, in a commit, somewhere the working tree's symlinks hide,
+and `check` could not tell that the keystore is inside the repository.
+
 ### 4.2 `.sec/names`
 
 ```
