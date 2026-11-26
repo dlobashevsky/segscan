@@ -474,3 +474,47 @@ func TestCLIHistoryBeforeSec(t *testing.T) {
 		t.Errorf("working tree with .sec/: exit %d\n%s", code, out)
 	}
 }
+
+// Writes into .sec/ must not follow symlinks the checkout put there: neither a
+// planted temporary name nor .sec itself.
+func TestCLISecWritesNoSymlinks(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("precious\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tmp := range []string{".sec/names.tmp", ".sec/manifest.tmp"} {
+		if err := os.Symlink(victim, filepath.Join(r.dir, tmp)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.must("segscan", "key", "add", "db_pass")
+	r.write("nodes/n1/etc/a.conf", "x\n")
+	r.must("segscan", "manifest", "fix")
+	if got, _ := os.ReadFile(victim); string(got) != "precious\n" {
+		t.Errorf("victim overwritten through a planted temporary symlink: %q", got)
+	}
+	if !strings.Contains(r.read(".sec/names"), "db_pass\t") || !strings.Contains(r.read(".sec/manifest"), "nodes/n1/etc/a.conf\t") {
+		t.Errorf("names or manifest not written")
+	}
+
+	// .sec as a symlink to a directory outside the repository.
+	r2 := newRepo(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(r2.dir, ".sec")); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := r2.run("segscan", "init"); code == 0 || !strings.Contains(errs, "not a directory") {
+		t.Errorf("init through a symlinked .sec: exit %d\n%s", code, errs)
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Errorf("init wrote outside the repository: %v", ents)
+	}
+	r.must("rm", "-r", ".sec/hooks")
+	r.must("mv", ".sec", "real-sec")
+	r.must("ln", "-s", "real-sec", ".sec")
+	if _, errs, code := r.run("segscan", "key", "add", "other"); code == 0 || !strings.Contains(errs, "not a directory") {
+		t.Errorf("key add through a symlinked .sec: exit %d\n%s", code, errs)
+	}
+}

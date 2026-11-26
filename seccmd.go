@@ -69,15 +69,28 @@ func cmdInit(args []string) {
 		{"hooks/pre-commit", preCommitHook, 0o755},
 		{"hooks/pre-push", prePushHook, 0o755},
 	}
-	if err := os.MkdirAll(secPath(top, "hooks"), 0o755); err != nil {
-		die(err)
+	for _, d := range []string{secDir, secDir + "/hooks"} {
+		if err := os.Mkdir(filepath.Join(top, d), 0o755); err != nil && !os.IsExist(err) {
+			die(err)
+		}
+		if err := repoDir(top, filepath.Join(top, d)); err != nil {
+			die(err)
+		}
 	}
 	for _, f := range files {
 		p := secPath(top, f.name)
 		if _, err := os.Lstat(p); err == nil {
 			continue
 		}
-		if err := os.WriteFile(p, []byte(f.body), f.mode); err != nil {
+		// O_EXCL: a symlink that appeared since the Lstat is not followed.
+		fh, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, f.mode)
+		if err != nil {
+			die(err)
+		}
+		if _, err := fh.WriteString(f.body); err != nil {
+			die(err)
+		}
+		if err := fh.Close(); err != nil {
 			die(err)
 		}
 		fmt.Fprintf(os.Stderr, "segscan: created %s/%s\n", secDir, f.name)
@@ -111,14 +124,63 @@ func loadNamesOrDie(top string) *nameList {
 	return l
 }
 
-func writeFile(p string, data []byte) {
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+// writeFile replaces a .sec/ file of the repository at top.
+func writeFile(top, p string, data []byte) {
+	if err := repoDir(top, filepath.Dir(p)); err != nil {
 		die(err)
 	}
-	if err := os.Rename(tmp, p); err != nil {
+	if err := atomicWrite(p, data, 0o644); err != nil {
 		die(err)
 	}
+}
+
+// repoDir checks that every component of dir below top is a real directory.
+// A checkout can hold symlinks anywhere, .sec itself included; following one
+// would let the repository redirect a write to any file the user can write.
+// A dir outside top is not checked: the user named it.
+func repoDir(top, dir string) error {
+	rel, err := filepath.Rel(top, dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	p := top
+	for _, c := range strings.Split(rel, string(filepath.Separator)) {
+		p = filepath.Join(p, c)
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("%s: not a directory (a symlink?); refusing to write through it", p)
+		}
+	}
+	return nil
+}
+
+// atomicWrite writes data to p through a new temporary file in the same
+// directory. The temporary name is random and created with O_EXCL, so no
+// file or symlink placed there beforehand is ever opened; the final rename
+// replaces p itself, never what p points to.
+func atomicWrite(p string, data []byte, mode os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(p), "."+filepath.Base(p)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(mode)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, p)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // keyUses counts the placeholders of every key in the working tree: name -> file -> count.
@@ -204,7 +266,7 @@ func keyAdd(args []string) {
 		}
 	}
 	l.Keys = append(l.Keys, k)
-	writeFile(secPath(top, "names"), l.format())
+	writeFile(top, secPath(top, "names"), l.format())
 	fmt.Println(placeholderText(k.Name, k.UUID))
 }
 
@@ -230,7 +292,7 @@ func keyRm(args []string) {
 		}
 	}
 	l.Keys = keys
-	writeFile(secPath(top, "names"), l.format())
+	writeFile(top, secPath(top, "names"), l.format())
 }
 
 func keyList(args []string) {
@@ -377,7 +439,7 @@ func manifestFix(args []string) {
 		keep = append(keep, e)
 	}
 	if added > 0 || removed > 0 {
-		writeFile(secPath(top, "manifest"), formatManifest(keep))
+		writeFile(top, secPath(top, "manifest"), formatManifest(keep))
 	}
 	fmt.Fprintf(os.Stderr, "segscan: manifest: %d added, %d removed\n", added, removed)
 }

@@ -278,6 +278,11 @@ func cmdTrain(args []string) {
 	}
 	m := train(filesOrGit(fs.Args()), loadAllow(c.allow, !c.noDef), *top, c.o.Skip, lists...)
 	path := modelPath(c.model)
+	if abs, err := filepath.Abs(path); err == nil && c.top != "" {
+		if err := repoDir(c.top, filepath.Dir(abs)); err != nil {
+			die(err)
+		}
+	}
 	if err := m.save(path); err != nil {
 		die(err)
 	}
