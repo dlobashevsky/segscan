@@ -51,7 +51,7 @@ func newRepo(t *testing.T) *repo {
 	dir := t.TempDir()
 	r := &repo{t: t, dir: dir, bin: bin, env: append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"HOME="+dir, "GIT_CONFIG_NOSYSTEM=1", "SEGSCAN_MODEL=", "SEGSCAN_KEYSTORE=",
+		"HOME="+t.TempDir(), "GIT_CONFIG_NOSYSTEM=1", "SEGSCAN_MODEL=", "SEGSCAN_KEYSTORE=",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")}
 	r.must("git", "init", "-q", "-b", "main")
 	return r
@@ -613,5 +613,16 @@ func TestCLIManifestEntryBelowFile(t *testing.T) {
 		"nodes/n1/etc/credential/token\ts\t0600\troot\troot\tsecret=token\n")
 	if out, _, code := r.run("segscan", "check"); code != 1 || !strings.Contains(out, "nodes/n1/etc/credential/token lies below nodes/n1/etc/credential, which is type s") {
 		t.Errorf("entry below an s entry: exit %d\n%s", code, out)
+	}
+}
+
+// A keystore inside the checkout is a config finding even while nothing of
+// it is tracked.
+func TestCLIKeystoreInsideRepository(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	r.write(".sec/config", "keystore = secrets\n")
+	if out, _, code := r.run("segscan", "check"); code != 1 || !strings.Contains(out, "the keystore must be outside the repository (it is at secrets)") {
+		t.Errorf("keystore inside the repository: exit %d\n%s", code, out)
 	}
 }

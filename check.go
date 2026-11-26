@@ -402,17 +402,23 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	if rel, err := filepath.Rel(canonical(ck.top), canonical(ks)); err == nil {
 		rels = append(rels, rel)
 	}
-	inRepo := false
+	inRepo, below := false, ""
 	for _, rel := range rels {
 		switch {
 		case rel == ".":
 			inRepo = true
 		case rel != ".." && !strings.HasPrefix(rel, "../"):
 			forbidPrefix = append(forbidPrefix, filepath.ToSlash(rel))
+			below = filepath.ToSlash(rel)
 		}
 	}
-	if inRepo {
+	// Even untracked, a keystore inside the checkout is exposed to every
+	// tool that walks the tree (3.2): a config finding, not only the paths.
+	switch {
+	case inRepo:
 		add(cfgPath, 0, 0, ckConfig, "the keystore cannot be the repository itself")
+	case below != "":
+		add(cfgPath, 0, 0, ckConfig, "the keystore must be outside the repository (it is at %s)", below)
 	}
 
 	for _, f := range s.Files {
