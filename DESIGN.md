@@ -322,6 +322,9 @@ key add <name> [-scope GLOB,...] [-base58]
 key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen: N chars of base58
                                     from crypto/rand (the house standard for our own keys)   (keystore)
 key rm  <name>                      from names; refuses while a placeholder still uses it
+key retire <name>                   move the current value of a key that is no longer in names
+                                    to retired (4.3), so it is still searched; key check reports
+                                    such keys until then   (keystore)
 key forget <name>                   drop the retired values of a key (4.3)   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
@@ -507,14 +510,16 @@ given in brackets:
    detector; an allowlisted fp is respected).
 6. **Known values** (`known_value`; only when the keystore is available).
    No value of any key occurs, in any form from 6.3 step 1, in a text file
-   or anywhere in the bytes of a binary file (8). A weak value (shorter
-   than 8 bytes or cheap under the cost model, as in 6.3 step 5) would
-   match ordinary text everywhere (`0` in every `0600`), so it is searched
-   only as a whole token, with no letter, digit, `_` or `-` on either side,
-   and only inside the key's scope. A key with a weak value must therefore
-   have a scope; `key check` reports one that has none, and so does check
-   6. This restricts where a weak value is looked for, not what the value
-   may be. No secret file from
+   or anywhere in the bytes of a binary file (8). Weakness is judged per
+   form, not per key: a form shorter than 8 bytes or cheap under the cost
+   model (as in 6.3 step 5) would match ordinary text everywhere (`0` in
+   every `0600`), so it is searched only as a whole token, with no letter,
+   digit, `_` or `-` on either side, and only inside the key's scope. The
+   other forms of the same value, such as `sha256("0")`, are distinctive and
+   are searched everywhere, like any strong value. A key with a weak form
+   must therefore have a scope; `key check` reports one that has none, and
+   so does check 6. This restricts where a weak form is looked for, not what
+   the value may be. No secret file from
    `files/` is in the repository, under any path:
    - a file that contains the whole content of a (non-empty) secret file anywhere, as
      a substring of its raw or unpacked bytes, is a finding. Equality alone
@@ -530,6 +535,13 @@ given in brackets:
      is found under another name. Other values count from 8 bytes, because
      `PORT=8080` or `DEBUG=true` would match everywhere. An empty value
      (`TOKEN=`) is never searched.
+
+   Like a keystore value, every such pattern (the whole content, each
+   counted line, each counted value) is searched under each single
+   transform of 5.2 and the chains used in the repository (6.3 step 1),
+   so a base64 or sha256 form of `abc123` from `app.env` is found too.
+   Weak forms follow the token rule above, within the scope of the type
+   `s` entries that name the secret file.
 
    The report names the key or secret file, the file and the line, never
    the value.
@@ -560,7 +572,10 @@ because only the deploy machine runs check 6. The state holds:
 - the ref tips already checked;
 - for every key, a digest of its name, its uuid and the complete sorted set
   of forms that check 6 searches for it (6.3 step 1), for the current value
-  and every retired one. The set changes with the value, with a rotation,
+  and every retired one, together with its scope and which of its forms are
+  weak. Widening the scope, or a form becoming weak or strong, therefore
+  also counts as a change, and the key is checked against the whole history
+  in the paths it now covers. The set changes with the value, with a rotation,
   with a new transform chain in the repository, and with a segscan release
   that adds or changes a transform, and any of these counts as a change.
   For every secret file, a digest of its name and of every form searched
