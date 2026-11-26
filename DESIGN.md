@@ -85,6 +85,7 @@ input (see 6.6).
   files/<name>             secrets that are whole files: .htpasswd, PEM keys, .env; mode 0600
   files.meta               name, scope of each file in files/ (4.3); mode 0600
   retired-files/           replaced or retired secret files, each with a .scope; mode 0700
+  pending                  journal of a rotation in progress (4.3); mode 0600, absent normally
 ```
 
 The directory and every file in it must be mode 0600 or 0700 and owned by
@@ -153,12 +154,16 @@ The file is kept sorted by name; `key add` and `key rm` rewrite it.
 <name> TAB <uuid> TAB <scope> TAB <flags> TAB <value>
 ```
 
-`scope` and `flags` are those of the key in `names` (4.2) when `key set`
-wrote the line, possibly empty. `key set` refreshes them on every write, and
-`key check` reports a line whose scope or flags differ from `names`
-(`key set -meta <name>` rewrites them without touching the value). They let
-`key retire` keep the right scope for a key that never reached a commit
-(6.2).
+`scope` is the union of every scope the key has had in `names` (4.2)
+while it held this value, possibly empty; `flags` are its current flags.
+`key set` with a new value starts the union afresh from the scope in
+`names`. `key check` reports a line whose scope does not cover the scope in
+`names`, or whose flags differ, and `key set -meta <name>` adds the current
+scope to the union and updates the flags without touching the value. It
+never narrows the union: the value may have been committed under the
+former scope, and when it is retired, check 6 must still search it there.
+These fields let `key retire` keep the right scope for a key that never
+reached a commit (6.2).
 
 The value is everything after the fourth TAB up to the end of the line,
 byte for byte: it may contain spaces, `#` and TABs and is not trimmed. It
@@ -170,22 +175,33 @@ or strength of a value, because values are often set by other tools or other
 teams. Weak values are reported by `key check -weak`, using the scanner's
 cost model.
 
-`retired` has the same fields plus the date it was retired, before the
-value: `<name> TAB <uuid> TAB <scope> TAB <flags> TAB <date> TAB <value>`.
-The scope and flags are the ones the key had then (6.2 `key retire`), so a
-weak retired value is still searched with its scope after the key has left
-`names`.
+`retired` has the same fields plus a rotation id and the time it was
+retired, before the value:
+`<name> TAB <uuid> TAB <scope> TAB <flags> TAB <rotation> TAB <time> TAB <value>`.
+The scope is the union from the `keys` line (and, for `key retire`, 6.2),
+so a weak retired value is still searched in every place it may have been
+committed after the key has left `names`. The rotation id is 128 random
+bits in hex, new for every retirement. The same value can be retired more
+than once (A, then B, then A again, then C); each retirement is its own
+record, with its own time and scope.
 `key set` does not drop the value it replaces: it appends it to `retired`.
-The order makes this survive a crash or power loss at any point. The old
-record is appended to `retired` (`O_APPEND`), and `retired` and the keystore
-directory are `fsync`ed. Only then is the new `keys` written to a temporary
-file in the same directory, `fsync`ed, renamed over `keys`, and the
-directory `fsync`ed again. A crash before the rename leaves the old value
-current and also in `retired`, which is harmless: it is searched twice. A
-rerun of `key set` does not append a record that `retired` already holds
-(same name, uuid and value), so recovery is just running it again. `import
--secret` (below) and `key retire` follow the same rule: the retired copy is
-durable before the current one changes.
+The order makes this survive a crash or power loss at any point:
+1. a journal, `pending` (mode 0600), is written with `O_EXCL` and `fsync`ed:
+   the new rotation id, the old record and the new `keys` line;
+2. the old record, with that rotation id, is appended to `retired`
+   (`O_APPEND`), and `retired` is `fsync`ed;
+3. the new `keys` is written to a temporary file in the same directory,
+   `fsync`ed and renamed over `keys`;
+4. `pending` is removed; the directory is `fsync`ed after each step.
+
+Every command that opens the keystore first finishes a `pending` it finds:
+it appends the record unless `retired` already holds that rotation id, then
+writes `keys` from the journal, then removes `pending`. The rotation id,
+not the value, is what tells a retry from a new retirement, so a value that
+comes back (A, B, A) is recorded again with its later time and scope. While
+`pending` exists, `key set` refuses to start another rotation. `import
+-secret` (below), `key retire` and `key retire -secret` use the same journal:
+the retired copy is durable before the current one changes.
 An old value can still be live (the rotation is not deployed yet) and can
 still sit in commits made elsewhere that no `check --all` has seen. Check 6
 searches every form of every retired value like a current one, and reports
@@ -198,7 +214,15 @@ Refs can also move after that run (a fetch brings a commit with the old
 value). So `key forget` itself checks the retired forms against every
 commit reachable now that the qualifying run did not cover, and drops the
 value only if that comes out clean too. If any ref moved backwards or was
-rewritten, it runs the whole history again for those forms.
+rewritten, it runs the whole history again for those forms. So it does when
+the forms or scope of the retired value differ from those the qualifying
+run searched: the digest of 6.5 changes on an ordinary forward update too,
+for instance when a new commit uses a transform chain no earlier commit
+did, and the commits that run covered were never searched for the new
+form. `key forget` compares the digest the run recorded with the current
+one, and on any difference searches the whole history for the value.
+The "since the value was retired" condition is taken from the latest
+retirement record of the value (the latest time among its rotation ids).
 
 Secret files are kept the same way. When `import -secret <name>` replaces
 `files/<name>`, the old content moves to
@@ -211,8 +235,10 @@ number, so the two never collide. Check 6 searches it like a current secret
 file, and `key forget <name>` drops it under the same condition.
 
 `files.meta` holds the scope of each current file in `files/`, one
-`<name> TAB <scope>` line, written by `import -secret` and refreshed by
-`key set -meta <name>` like the scope of a key. `key check` reports a line
+`<name> TAB <scope>` line, written by `import -secret` and widened by
+`key set -meta <name>` like the scope of a key: the union of every scope
+the manifest gave the file while it had this content, started afresh when
+`import -secret` replaces the content. `key check` reports a line
 that differs from the scope the manifest gives now. A secret file that no
 type `s` entry names any more is retired with `key retire -secret <name>`
 (6.2): the current file moves to `retired-files/` with the union of the
