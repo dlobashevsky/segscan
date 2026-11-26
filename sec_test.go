@@ -330,6 +330,11 @@ func TestAllowPathGitignoreStyle(t *testing.T) {
 		{"*.csv", "data/x.json", false},
 		{"dat", "data/x.json", false},
 		{"other/", "data/other.csv", false},
+		{"/data/", "data/ban/x.csv", true},
+		{"/data/", "sub/data/x.csv", false}, // anchored at the top
+		{"/ban", "data/ban/x.csv", false},
+		{"/*.csv", "x.csv", true},
+		{"/*.csv", "data/x.csv", false},
 	}
 	for _, c := range cases {
 		a := &allowList{fp: map[string]bool{}}

@@ -175,7 +175,10 @@ func (a *allowList) skipPath(p string) bool {
 	parts := strings.Split(p, "/")
 	for _, pat := range a.paths {
 		dirOnly := strings.HasSuffix(pat, "/")
-		pat = strings.TrimSuffix(cleanRel(pat), "/")
+		// A leading "/" anchors the glob at the repository top, as in
+		// .gitignore: path:/data/ is data/ at the top only.
+		anchored := strings.HasPrefix(pat, "/")
+		pat = strings.TrimSuffix(cleanRel(strings.TrimLeft(pat, "/")), "/")
 		if pat == "" || pat == "." {
 			continue
 		}
@@ -188,7 +191,7 @@ func (a *allowList) skipPath(p string) bool {
 			switch {
 			case strings.Contains(pat, "**"):
 				ok = matchPath(pat, cand)
-			case strings.Contains(pat, "/"):
+			case anchored || strings.Contains(pat, "/"):
 				ok, _ = filepath.Match(pat, cand)
 			default:
 				ok, _ = filepath.Match(pat, parts[i-1])

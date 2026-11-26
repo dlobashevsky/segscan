@@ -467,7 +467,8 @@ False positives:
   does. The glob is matched against the path from the repository top,
   wherever you run segscan and however you name the files (`scan .`,
   `scan ./data`, from a subdirectory); one that matches a directory covers
-  everything below it:
+  everything below it. A symlink is matched by its own name, not by its
+  target:
 
   | Line | Skips |
   |---|---|
@@ -476,6 +477,7 @@ False positives:
   | `path:data/**/*.csv` | `.csv` files at any depth under `data/` |
   | `path:*.csv` | `.csv` files anywhere |
   | `path:fixtures` | every file or directory named `fixtures`, anywhere |
+  | `path:/data/` | `data/` at the repository top only |
 
   Use it for files full of ids (a list of UUIDs, a dump with alphanumeric
   codes). It does not hide anything from check 6: known values are

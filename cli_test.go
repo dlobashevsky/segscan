@@ -754,6 +754,18 @@ func TestCLIScanAllowFromAnywhere(t *testing.T) {
 			t.Errorf("%s: segscan %v lost app.conf:\n%s", c.dir, c.args, out)
 		}
 	}
+	// A symlink keeps its own name: path:alias.conf skips it, and a rule for
+	// its target does not.
+	os.Symlink("app.conf", filepath.Join(r.dir, "alias.conf"))
+	r.write(".sec/allow", "path:alias.conf\n")
+	if out := run("", "scan", "alias.conf", "app.conf"); strings.Contains(out, "alias.conf") || !strings.Contains(out, "app.conf") {
+		t.Errorf("symlink and path:alias.conf:\n%s", out)
+	}
+	r.write(".sec/allow", "path:app.conf\n")
+	if out := run("", "scan", "alias.conf", "app.conf"); !strings.Contains(out, "alias.conf") {
+		t.Errorf("a rule for the target hid the symlink:\n%s", out)
+	}
+	os.Remove(filepath.Join(r.dir, "alias.conf"))
 	// The manifest hint says to stage the manifest.
 	r.write("nodes/n1/etc/a.conf", "a=1\n")
 	r.must("git", "add", "-A")

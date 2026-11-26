@@ -278,6 +278,18 @@ var repoTop = func() func() string {
 	}
 }()
 
+var repoCwd = func() func() string {
+	var once sync.Once
+	var cwd string
+	return func() string {
+		once.Do(func() {
+			wd, _ := os.Getwd()
+			cwd = canonical(wd)
+		})
+		return cwd
+	}
+}()
+
 // repoPath gives a file named on the command line or by git ls-files (both
 // relative to the current directory) as a path from the repository top, the
 // form path:<glob> lines are written in. Outside a repository, or for a file
@@ -287,11 +299,13 @@ func repoPath(f string) string {
 	if top == "" {
 		return cleanRel(f)
 	}
-	abs, err := filepath.Abs(f)
-	if err != nil {
-		return cleanRel(f)
+	// Only the current directory is resolved: the name itself, a symlink
+	// in the repository included, stays the repository entry being scanned.
+	abs := f
+	if !filepath.IsAbs(f) {
+		abs = filepath.Join(repoCwd(), f)
 	}
-	rel, err := filepath.Rel(top, canonical(abs))
+	rel, err := filepath.Rel(top, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return cleanRel(f)
 	}
