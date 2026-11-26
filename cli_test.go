@@ -518,3 +518,35 @@ func TestCLISecWritesNoSymlinks(t *testing.T) {
 		t.Errorf("key add through a symlinked .sec: exit %d\n%s", code, errs)
 	}
 }
+
+// .sec itself replaced by a symlink or a submodule in a snapshot: that is a
+// config finding, not a snapshot from before adoption.
+func TestCLISecNotADirectory(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	r.write(".sec/config", "forbid = forbidden.txt\n")
+	r.must("git", "add", "-A")
+	r.must("git", "commit", "-q", "-m", "adopt")
+	r.must("git", "rm", "-q", "-r", "--cached", ".sec")
+	r.must("mv", ".sec", "real-sec")
+	r.must("ln", "-s", "real-sec", ".sec")
+	r.write("forbidden.txt", "x\n")
+	r.must("git", "add", ".sec", "forbidden.txt")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, ".sec\t0\t0\tconfig\tmust be a directory") {
+		t.Errorf("staged symlink .sec: exit %d\n%s", code, out)
+	}
+	if _, errs, code := r.run("segscan", "hook"); code != 2 || !strings.Contains(errs, "not a directory") {
+		t.Errorf("hook with a staged symlink .sec: exit %d\n%s", code, errs)
+	}
+	r.must("git", "commit", "-q", "--no-verify", "-m", "symlink .sec")
+	if out, _, code := r.run("segscan", "check", "-range", "HEAD~1..HEAD"); code != 1 || !strings.Contains(out, "must be a directory") {
+		t.Errorf("commit with a symlink .sec: exit %d\n%s", code, out)
+	}
+	// A submodule (gitlink) at .sec.
+	r.must("git", "rm", "-q", "--cached", ".sec")
+	head := strings.TrimSpace(r.must("git", "rev-parse", "HEAD"))
+	r.must("git", "update-index", "--add", "--cacheinfo", "160000,"+head+",.sec")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, ".sec\t0\t0\tconfig\tmust be a directory") {
+		t.Errorf("staged gitlink .sec: exit %d\n%s", code, out)
+	}
+}

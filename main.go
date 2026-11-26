@@ -520,6 +520,9 @@ func (c *common) stagedModel() []byte {
 }
 
 func (c *common) fromIndex() bool {
+	if out, _ := exec.Command("git", "-C", c.top, "ls-files", "-z", "--", secDir).Output(); strings.Contains("\x00"+string(out), "\x00"+secDir+"\x00") {
+		die(fmt.Errorf("staged %s is not a directory", secDir))
+	}
 	for _, p := range []string{"config", "allow"} {
 		c.stagedRegular(p)
 	}

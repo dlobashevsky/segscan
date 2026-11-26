@@ -325,6 +325,12 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 			break
 		}
 	}
+	// .sec itself as a symlink, submodule or file: the snapshot would look
+	// like one from before adoption and lose names, manifest and forbid.
+	if f := s.byPath[secDir]; f != nil {
+		hasSec = true
+		add(secDir, 0, 0, ckConfig, "must be a directory")
+	}
 
 	// A symlink or submodule in place of a .sec/ file would read as missing
 	// and fall back to defaults, dropping the repository's own forbid list.
