@@ -367,7 +367,9 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	if !filepath.IsAbs(ks) {
 		ks = filepath.Join(ck.top, ks)
 	}
-	rel, relErr := filepath.Rel(ck.top, ks)
+	// Compare real paths: a keystore reached through a symlink alias of the
+	// repository is still inside it.
+	rel, relErr := filepath.Rel(canonical(ck.top), canonical(ks))
 	if relErr == nil && rel == "." {
 		add(cfgPath, 0, 0, ckConfig, "the keystore cannot be the repository itself")
 	}
@@ -451,6 +453,24 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 		}
 	}
 	return out
+}
+
+// canonical resolves symlinks in p. For a path that does not exist (yet),
+// the longest existing prefix is resolved and the rest appended.
+func canonical(p string) string {
+	p = filepath.Clean(p)
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
 }
 
 // ---------- the command ----------

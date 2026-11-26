@@ -383,6 +383,18 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 	}
 	r.must("git", "rm", "-q", "-r", "--cached", ".sec/config")
 	r.must("rm", "-r", ".sec/config")
+	// A keystore reached through a symlink alias of the repository is
+	// still inside it.
+	alias := filepath.Join(t.TempDir(), "alias")
+	r.must("ln", "-s", r.dir, alias)
+	r.write(".sec/config", "keystore = "+filepath.Join(alias, "vault")+"\n")
+	r.write("vault/keys", "x\n")
+	r.must("git", "add", "-A")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "vault/keys\t0\t0\tforbidden") {
+		t.Errorf("keystore through a symlink alias: exit %d\n%s", code, out)
+	}
+	r.must("git", "rm", "-q", "--cached", "vault/keys")
+	r.must("rm", "-r", "vault")
 	// The keystore cannot be the repository itself.
 	r.write(".sec/config", "keystore = .\n")
 	r.must("git", "add", "-A")
