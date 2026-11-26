@@ -144,12 +144,10 @@ searchable on the destination, and the next run finishes or redoes it.
 
 The files segscan defines (everything in `.sec/` and in the keystore) are
 UTF-8 text with LF line ends; the configuration files of the nodes in the
-tree are whatever their programs expect, binary included (8). Of segscan's
-own files there are two exceptions: the value
-field of the keystore's `keys` and `retired` is any bytes except LF (4.3),
-while their names, uuids and dates are UTF-8 like everything else; and the
-secret files in `files/` and `retired-files/` are opaque bytes, binary
-included (a PKCS#12 bundle), with no format at all. `#` at the start of a line begins
+tree are whatever their programs expect, binary included (8). The one exception
+among segscan's own files: the secret files in `files/` and
+`retired-files/` are opaque bytes, binary included (a PKCS#12 bundle), with
+no format at all. `#` at the start of a line begins
 a comment and blank lines are ignored, except in `keys` (see 4.3). Fields are
 separated by one TAB. In `.sec/config` only, a `#` after a space or TAB also
 starts a comment, so a value cannot contain ` #`.
@@ -207,14 +205,18 @@ The file is kept sorted by name; `key add` and `key rm` rewrite it.
 <name> TAB <uuid> TAB <value>
 ```
 
-The value is everything after the second TAB up to the end of the line,
-byte for byte: it may contain spaces, `#` and TABs and is not trimmed. It
-cannot contain LF; a multi-line value is a file in `files/`. It cannot be
-empty either: an empty value would match at every byte. A line with an empty
-value is an error, and `key set` refuses one (`-gen N` needs N >= 1). Comment lines
-start with `#` in the first column. There are no requirements on the length
-or strength of a value, because values are often set by other tools or other
-teams.
+The value is everything after the second TAB up to the end of the line.
+It is printable ASCII (`0x21`-`0x7e`) without `"`, `'`, `` ` ``, `\` and
+`#`: no spaces, TABs, quotes, backslashes, comment signs, control bytes or
+non-ASCII. Our values are base58 and never come near this; a value from
+another tool that does is refused by `key set` and reported by `key check`,
+rather than handled by quoting and escaping rules in every place it is
+written and searched (12.9). A multi-line or binary secret is a file in
+`files/`. The value cannot be empty either: an empty value would match at
+every byte (`-gen N` needs N >= 1). Comment lines start with `#` in the
+first column. Within that alphabet there are no requirements on the length
+or strength of a value, because values are often set by other tools or
+other teams.
 
 segscan does not look for weak or default values (`admin`, `guest`,
 `password12345`). It exists to stop real keys from being committed, and a
@@ -468,7 +470,8 @@ exists). The existing `install` command is unchanged and writes
 key add <name> [-scope GLOB,...] [-base58]
                                     new name + uuid in names; prints the placeholder   (no keystore)
 key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen: N chars of base58
-                                    from crypto/rand (the house standard for our own keys)   (keystore)
+                                    from crypto/rand (the house standard for our own keys); a value
+                                    outside the alphabet of 4.3 is refused   (keystore)
 key rm  <name>                      from names; refuses while a placeholder still uses it
 key retire <name>                   move the current value of a key that is no longer in names
                                     to retired (4.3), so it is still searched; key check reports
@@ -482,7 +485,8 @@ key forget -secret <name>           drop the retired versions of a secret file (
                                     both be called htpasswd), so every command that can act on
                                     either takes -secret for the file   (keystore)
 key list                            names, scopes, where each is used, and how often
-key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
+key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches,
+                                    values outside the alphabet of 4.3;
                                     -weak: keys whose value has weak forms, which check 6 does
                                     not search (4.3)   (keystore)
 keys sync <host>:<path>             copy the keystore with modes kept (ssh)   (keystore)
@@ -788,16 +792,10 @@ given in brackets:
    - so is a file that contains a line of one (trimmed of spaces);
    - so is a file that contains the value part of a `name=value` line of
      one, so `TOKEN=Zx81...` is found under another name. The value is
-     taken both as written and as the shell and dotenv conventions read it:
-     an inline comment outside quotes (` # ...`) cut off first, then
-     surrounding `"..."` or `'...'` removed, and the escapes undone. The
-     two conventions differ, so both readings are searched: the POSIX
-     shell one (inside double quotes only `\"`, `\\`, `\$`, `` \` `` and
-     backslash-newline are escapes, so `\n` stays two characters; outside
-     quotes a backslash escapes the next character, `TOKEN=Zx81\ value`
-     gives `Zx81 value`) and the dotenv one (inside double quotes `\n` is
-     also a newline), so `TOKEN="Zx81..." # prod`
-     is also found as the bare `Zx81...` copied elsewhere.
+     taken as written, and also without one pair of surrounding `"..."` or
+     `'...'`. Shell and dotenv escaping and inline comments are not
+     interpreted (12.9): our secrets never need them, and a line that uses
+     them (`JAVA_OPTS="-Xmx1g -Xms1g"`) holds no secret to miss.
 
    An empty pattern (an empty or blank line, `OPTIONAL=`, `X=""`) is dropped
    before any transform: it holds no secret, and its forms (`sha256("")`)
@@ -850,11 +848,10 @@ because only the deploy machine runs check 6. The state holds:
   and every retired one. The set changes with the value, with a rotation,
   with a new transform chain in the repository, and with a segscan release
   that adds or changes a transform or the cost model, and any of these
-  counts as a change. Every digest also covers the version of the exact
-  search itself (`scan_version`, raised with every release that changes
-  which encodings are searched or which containers are unpacked, such as
-  UTF-16BE or a new unpacker), so such a release makes every key and secret
-  file be checked against the whole history again.
+  counts as a change. The state also records the segscan version that
+  wrote it; when another version reads it, the next `--all` checks the
+  whole history and no earlier run counts for `key forget`, since how
+  check 6 reads files (encodings, containers) may have changed.
   For every secret file, a digest of its name and of every form searched
   for it, again for the current version in `files/` and every retired one
   in `retired-files/`. A version that was current and retired again
@@ -974,59 +971,30 @@ by hand.
 
 ## 8. Binary files
 
-A file with a NUL in its first 8000 bytes is binary. Containers that check 6
-unpacks are recognized before that test, whatever their first bytes:
-gzip (`1f 8b`), zip (`PK\x03\x04`), PDF (`%PDF-`), and brotli by the `.br`
-name, since brotli has no magic number. A PDF or a `.br` file with no NUL
-near the start is still unpacked for the exact scan, and is also scanned as
-text.
+A file with a NUL in its first 8000 bytes is binary for the statistical
+scanner. For check 6 the test is stricter and covers the whole file: any
+file that is not valid UTF-8 text, or holds a NUL anywhere, is binary, so a
+compressed payload behind a long text prefix (a self-extracting shell
+script) is treated as binary too. A configuration repository holds few
+such files, so segscan does not try to understand every binary format;
+what it cannot read fully is refused, and keeping such a file is a visible
+decision in `.sec/allow` (12.9).
 
 - `scan` and `hook` without `.sec/`: skipped, as now.
-- `check`, and `scan`/`hook` inside `.sec/` with `binary = scan`: the file is
-  scanned as its strings:
-  - runs of at least 8 printable ASCII bytes;
-  - runs of at least 8 UTF-16LE characters;
-  - gzip, brotli, zip and the streams of a PDF are unpacked first, up to
-    64 MiB unpacked and two levels deep. In a PDF every lossless filter is
-    decoded (`FlateDecode`, `LZWDecode`, `ASCII85Decode`, `ASCIIHexDecode`,
-    `RunLengthDecode`, chained as the stream says). An encrypted PDF
-    (`/Encrypt`), or a stream with any other filter that is not an image
-    codec, is "not fully scanned" (below); image codecs (`DCTDecode`,
-    `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`) hold pixels, not text, and
-    their raw bytes are still searched as they are. In a PNG the
-    compressed text chunks (`zTXt`, and `iTXt` with the compression flag
-    set) are inflated and searched, like the plain `tEXt` and `iTXt` text
-    that is already in the raw bytes. A container is
-    recognized anywhere in the file, not only at offset 0: a ZIP by its
-    end-of-central-directory record, a gzip member by its header (`1f 8b
-    08`) followed by a stream that inflates, a PDF by `%PDF-`. So a payload
-    behind a prefix (a self-extracting shell script or executable, a JAR
-    with a launcher script) is unpacked too. A header that is found but
-    does not decode is "not fully scanned", like any failed unpack;
-  - a file in another common compressed or archive format that segscan does
-    not unpack (xz, zstd, bzip2, 7z, rar, recognized by its magic bytes,
-    also when they follow an executable prefix as in a self-extracting
-    archive) is
-    a blocking `known_value` finding, "not fully scanned", in check 6, as
-    for a failed unpack (below), so an archive cannot hide a known value
-    just by using an unsupported format. A file that must stay goes into
-    `.sec/allow` as `path:<glob>`.
-
-  The statistical scanner reports findings in the strings with the byte
-  offset in the `col` field. The length limits apply to it only.
-
-  Check 6 does not use the strings. It searches the raw bytes, and the
-  unpacked bytes, for every strong form of every value (6.5 check 6): as
-  is, in UTF-16LE and in UTF-16BE (a BOM changes nothing: the form is
-  searched anywhere in the bytes). The strings' length limits do not apply, so a value
-  is not lost between two NUL bytes.
-
-  Unpacking that fails, or that hits a limit, leaves part of the file
-  unread. For the statistical scanner that is a warning. For check 6 it is
-  a blocking finding (`known_value`: "not fully scanned"), because a known
-  value could sit past the limit. A file that must stay in the repository
-  anyway goes into `.sec/allow` as `path:<glob>`, which is a visible
-  decision.
+- `check`, and `scan`/`hook` inside `.sec/` with `binary = scan`: the
+  statistical scanner reads the file's strings (runs of at least 8
+  printable ASCII bytes, or of at least 8 UTF-16LE characters) and reports
+  findings with the byte offset in the `col` field.
+- Check 6 searches the raw bytes for every strong form of every value
+  (6.5), as is, in UTF-16LE and in UTF-16BE. It unpacks two containers,
+  wherever they start in the file (so also behind a self-extracting
+  prefix): gzip members (`1f 8b 08`) and ZIP archives (by their
+  end-of-central-directory record), up to 64 MiB unpacked and two levels
+  deep, and searches what they hold the same way.
+- Every other binary file (PDF, images, other compressed or archive
+  formats, anything encrypted) and every unpack that fails or hits a limit
+  is a blocking `known_value` finding, "not fully scanned". A file that
+  must stay goes into `.sec/allow` as `path:<glob>` (`path:**/*.png`).
 - Binary files never get placeholders and are never rewritten.
 
 ## 9. Hooks
@@ -1099,7 +1067,8 @@ and tests intact.
 3. Users and groups differ between nodes. Manifest entries are per node, and
    names are resolved on the target (4.4).
 4. Our own keys are always base58 from a random source (`key set -gen`).
-   Values set by external tools may be anything (4.3).
+   Values set by external tools may be anything within the alphabet of
+   4.3.
 5. `check --all` keeps incremental state in the keystore (6.5).
 6. Transform chains: configurations need at most two (a sha256 passed
    through a URL); three and four exist only for our own tools. Single
@@ -1113,3 +1082,11 @@ and tests intact.
    S/MIME) never enter the repository. Putting one into `files/` without a
    type `s` entry makes check 6 search for it; `key check` lists it as
    unnamed, which is expected for such a file.
+9. Edge cases are refused, not parsed. The nodes run Linux, the files use
+   LF, and our values have no spaces, quotes or escapes. So instead of
+   handling CRLF, shell and dotenv quoting, or every binary format, segscan
+   rejects what falls outside: `.sec/` files with CR or invalid UTF-8,
+   key values outside the alphabet of 4.3, and binary files it cannot fully
+   read (8), each of which is either fixed or allowlisted on purpose.
+   Secret-file values are searched as written and unquoted, without
+   escaping rules.
