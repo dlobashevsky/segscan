@@ -161,7 +161,10 @@ or strength of a value, because values are often set by other tools or other
 teams. Weak values are reported by `key check -weak`, using the scanner's
 cost model.
 
-`retired` has the same format plus a fourth field, the date it was retired.
+`retired` has the same format plus a fourth field, the date it was retired,
+and a fifth and sixth, the scope and flags the key had then (4.2), so a weak
+retired value is still searched with its scope after the key has left
+`names`.
 `key set` does not drop the value it replaces: it appends it to `retired`.
 An old value can still be live (the rotation is not deployed yet) and can
 still sit in commits made elsewhere that no `check --all` has seen. Check 6
@@ -324,7 +327,10 @@ key set <name> [-gen N]             value from stdin (no echo on a tty), or -gen
 key rm  <name>                      from names; refuses while a placeholder still uses it
 key retire <name>                   move the current value of a key that is no longer in names
                                     to retired (4.3), so it is still searched; key check reports
-                                    such keys until then   (keystore)
+                                    such keys until then. The retired record keeps the key's
+                                    former scope and flags, read from the last commit whose
+                                    .sec/names still has the key, so weak forms keep their
+                                    token-and-scope rule   (keystore)
 key forget <name>                   drop the retired values of a key (4.3)   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
@@ -346,14 +352,22 @@ sudo segscan import [-n] -node <node> <abs-path>...
 Copies `/<abs-path>` from the running system into `nodes/<node>/<abs-path>`
 and rewrites it (needs the keystore).
 
-The destination must stay inside the repository. Every existing component of
-`nodes/<node>/<abs-path>` below the repository top, the file itself included,
-must be a plain directory or a plain file, never a symlink. Before writing,
-the resolved destination is checked to be under the repository top. A
-symlink there is an error, because under sudo it could point back into the
-live system and the write would replace a real configuration with
-placeholders. A symlink that is part of the configuration is recorded as type
-`l` and recreated, not followed.
+`<node>` must be one path component (no `/`, not `.` or `..`) that names
+an existing node root under `roots` (4.1); `-node ../.git` is an error. The
+destination must stay inside that node root, not merely inside the
+repository. Every existing ancestor of `nodes/<node>/<abs-path>` below the
+node root must be a plain directory, never a symlink. Before writing, the
+resolved destination is checked to be under the node root. A symlink there
+is an error, because under sudo it could point back into the live system and
+the write would replace a real configuration with placeholders.
+
+The final component may be a symlink only when the manifest declares it as
+type `l`: a configuration symlink imported earlier. It is never followed;
+it is read with `readlinkat`, and replaced, if the live link changed, by
+creating the new link under a temporary name with `symlinkat` and
+`renameat` over the old one, both relative to the parent descriptor. A
+symlink that is part of the configuration is recorded as type `l` and
+recreated, not followed.
 
 The check and the write must be the same walk, or a directory renamed and
 replaced by a symlink between them would still be followed. So the
@@ -369,12 +383,15 @@ The steps:
 
 1. For every key, it builds the set of forms to search for: the value under
    no transform, under each single transform in 5.2, and under every
-   transform chain used for that key in the tree being imported into and,
-   for check 6, in any of: the commits the check covers, `HEAD`, the
+   chain of two transforms (every ordered pair from 5.2, generated whether
+   or not a placeholder uses it), and under every longer chain used for that
+   key in the tree being imported into and, for check 6, in any of: the commits the check covers, `HEAD`, the
    commits a range excludes (its base), and the chains recorded in
    `check.state`. The state keeps every chain it has seen, so a chain
    removed in the very commit being checked (the staged change, or the
-   first commit of a range) is still searched. A
+   first commit of a range) is still searched. Chains of three or four
+   are not all generated: 10^4 forms per value would make the search set
+   too large to keep for every key, so only those actually used count. A
    transform that cannot represent the value (5.2) gives no form and is
    left out of the set, here and in check 6; it is an error only where a
    placeholder asks for it (`expand`, the round trip). Forms are searched
@@ -426,11 +443,13 @@ error: as a substring it would match everywhere) and the manifest gets a
 type `s` entry. `-n` prints what would change without writing.
 
 Binary files are copied as they are, without replacement, and scanned (8).
-Before a binary is written into the tree, `import` runs check 6 on its bytes
-(current and retired values, secret files). A finding stops the import and
-nothing is written, as with a known value outside its scope: the raw value
-must never reach the working tree. Such a file belongs in the keystore,
-with `-secret <name>`.
+Before any file is written into the tree, text or binary, `import` runs
+check 6 on the bytes it is about to write: for a text file the rewritten
+content, after the placeholders are in, so what is left is what replacement
+could not take (a retired value, a secret-file pattern, a form outside its
+scope). A finding stops the import and nothing is written: the raw value
+must never reach the working tree. A binary file with a finding belongs in
+the keystore, with `-secret <name>`.
 
 ### 6.4 `expand` (repository -> node)
 
