@@ -85,7 +85,6 @@ input (see 6.6).
   files/<name>             secrets that are whole files: .htpasswd, PEM keys, .env; mode 0600
   retired-files/           replaced or retired secret files; mode 0700
   pending                  journal of a rotation in progress (4.3); mode 0600, absent normally
-  lock                     flock target that serializes changes (4.3); mode 0600
 ```
 
 The directory and every file in it must be mode 0600 or 0700 and owned by
@@ -100,7 +99,7 @@ root, so no keystore file is ever opened by path, for reading or writing:
   last component, and `fstat` on the descriptor must show a directory of
   mode 0700 owned by the invoking user. Root is not accepted for the
   directory itself, so `~/.secshell/<project> -> /root` is refused;
-- every file in it (`keys`, `retired`, `pending`, `lock`, `check.state`,
+- every file in it (`keys`, `retired`, `pending`, `check.state`,
   `check.key`) and `files/` and `retired-files/` are opened from that
   descriptor with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`
   (otherwise `openat(O_NOFOLLOW)`), and checked with `fstat` on the opened
@@ -120,12 +119,17 @@ allowed for convenience; `.sec/.gitignore` ignores it, and `git clean`
 removes the link, not the target. `keys sync <host>` copies the keystore to
 another machine over ssh with the modes kept. It is not a file copy: it
 runs `segscan keys receive` on the destination, which takes the
-destination's own exclusive `lock` (4.3; `lock` is never copied, so a
-command holding it there keeps a valid lock) and receives the files into
+destination's own exclusive lock (4.3, on its keystore directory, which
+the sync never replaces) and receives the files into
 a staging directory inside the keystore. Under the lock it merges
 `retired` and `retired-files/` first, as a union by rotation id (nothing
-retired on either side is ever lost), then `files/`, and replaces `keys`
-last with an atomic rename, each step `fsync`ed and journalled like a
+retired on either side is ever lost). A destination value that would be
+displaced, a current key value or a current secret file that differs from
+the source's and is not already in the source's retired records (rotated
+or set up locally), is first retired on the destination with a fresh
+rotation id, so it stays searchable there and is never silently dropped;
+`keys receive` lists each such value by name. Then it updates `files/`,
+and replaces `keys` last with an atomic rename, each step `fsync`ed and journalled like a
 rotation. An interrupted sync therefore leaves the old current value
 searchable on the destination, and the next run finishes or redoes it.
 
@@ -229,10 +233,16 @@ The order makes this survive a crash or power loss at any point:
    `fsync`ed and renamed over `keys`;
 4. `pending` is removed; the directory is `fsync`ed after each step.
 
-Every command that changes the keystore holds an exclusive `flock` on the
-keystore file `lock` (opened like the others) for its whole run, recovery
-included; commands that only read it (`check`, `expand`, `key check`) hold
-a shared one. A second `key set` therefore waits for the first instead of
+Every command that changes the keystore holds an exclusive `flock` for its
+whole run, recovery included; commands that only read it (`check`,
+`expand`, `key check`) hold a shared one. The lock is taken on the
+keystore directory descriptor itself (3.2), the one every other file is
+opened from, not on a file inside it: the invoking user owns that
+directory and could rename a lock file and create another while a command
+under sudo holds the first. They can rename the whole directory too, but
+then the running command works on the renamed one through its descriptor,
+and a second command opens a different keystore; neither can be made to
+interleave with the other on the same files. A second `key set` therefore waits for the first instead of
 finishing its live journal, and a `pending` seen under the exclusive lock
 can only be left over from a process that died. Under that lock, a command
 first finishes a `pending` it finds:
