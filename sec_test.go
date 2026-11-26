@@ -196,6 +196,9 @@ func TestManifest(t *testing.T) {
 	if len(probs) != 0 || len(es) != 2 {
 		t.Fatal(es, probs)
 	}
+	if es, probs := parseManifest([]byte("nodes/n1/etc/app/app.env\ts\t0600\troot\troot\tsecret=app_env\tscope=nodes/n1/etc/**,nodes/n2/etc/**\n")); len(probs) != 0 || len(es) != 1 {
+		t.Fatal(es, probs)
+	}
 	if got := string(formatManifest(es)); got != manifestHeader+"nodes/n1/etc/.htpasswd\ts\t0640\troot\twww-data\tsecret=htpasswd\n"+
 		"nodes/n1/etc/x\tf\t0640\troot\tadm\tacl=u:www:r\n" {
 		t.Errorf("format: %q", got)
@@ -215,6 +218,8 @@ func TestManifest(t *testing.T) {
 		"a\tf\t0644\t\troot",
 		"a\ts\t0600\troot\troot",
 		"a\tf\t0644\troot\troot\tnoequals",
+		"a\tf\t0644\troot\troot\tscope=nodes/**",
+		"a\ts\t0600\troot\troot\tsecret=k\tscope=nodes/[",
 		"a\tf\t0644",
 	} {
 		if _, probs := parseManifest([]byte(bad)); len(probs) == 0 {

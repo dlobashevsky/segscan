@@ -166,8 +166,16 @@ func parseManifest(data []byte) ([]*mEntry, []lineProblem) {
 		for _, a := range e.Attrs {
 			k, v, has := strings.Cut(a, "=")
 			check(has && k != "", "%s: bad attribute %q", e.Path, a)
-			if k == "secret" {
+			switch k {
+			case "secret":
 				secret = v
+			case "scope":
+				check(e.Type == "s", "%s: scope= is only for type s", e.Path)
+				for _, g := range splitList(v) {
+					if err := checkGlob(g); err != nil {
+						check(false, "%s: %v", e.Path, err)
+					}
+				}
 			}
 		}
 		if e.Type == "s" {

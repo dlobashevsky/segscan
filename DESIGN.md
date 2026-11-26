@@ -148,10 +148,17 @@ The file is kept sorted by name; `key add` and `key rm` rewrite it.
 ### 4.3 keystore `keys`
 
 ```
-<name> TAB <uuid> TAB <value>
+<name> TAB <uuid> TAB <scope> TAB <flags> TAB <value>
 ```
 
-The value is everything after the second TAB up to the end of the line,
+`scope` and `flags` are those of the key in `names` (4.2) when `key set`
+wrote the line, possibly empty. `key set` refreshes them on every write, and
+`key check` reports a line whose scope or flags differ from `names`
+(`key set -meta <name>` rewrites them without touching the value). They let
+`key retire` keep the right scope for a key that never reached a commit
+(6.2).
+
+The value is everything after the fourth TAB up to the end of the line,
 byte for byte: it may contain spaces, `#` and TABs and is not trimmed. It
 cannot contain LF; a multi-line value is a file in `files/`. It cannot be
 empty either: an empty value would match at every byte. A line with an empty
@@ -161,9 +168,10 @@ or strength of a value, because values are often set by other tools or other
 teams. Weak values are reported by `key check -weak`, using the scanner's
 cost model.
 
-`retired` has the same format plus a fourth field, the date it was retired,
-and a fifth and sixth, the scope and flags the key had then (4.2), so a weak
-retired value is still searched with its scope after the key has left
+`retired` has the same fields plus the date it was retired, before the
+value: `<name> TAB <uuid> TAB <scope> TAB <flags> TAB <date> TAB <value>`.
+The scope and flags are the ones the key had then (6.2 `key retire`), so a
+weak retired value is still searched with its scope after the key has left
 `names`.
 `key set` does not drop the value it replaces: it appends it to `retired`.
 An old value can still be live (the rotation is not deployed yet) and can
@@ -212,6 +220,9 @@ overwrites an earlier retired version
   before writing anything. A name the target does not know is an error, and
   nothing is changed.
 - `attr`: zero or more `k=v`:
+  - `scope=<glob>,...` for type `s`: where the weak forms of the secret
+    file are searched (6.5 check 6). Without it, the directory of the entry
+    and everything below it;
   - `secret=<name>` for type `s`. The name follows the key name grammar
     (4.2), so it is one path component and never `.` or `..`. The file is
     opened through a descriptor of the keystore directory, never by path:
@@ -328,9 +339,12 @@ key rm  <name>                      from names; refuses while a placeholder stil
 key retire <name>                   move the current value of a key that is no longer in names
                                     to retired (4.3), so it is still searched; key check reports
                                     such keys until then. The retired record keeps the key's
-                                    former scope and flags, read from the last commit whose
-                                    .sec/names still has the key, so weak forms keep their
-                                    token-and-scope rule   (keystore)
+                                    former scope and flags: the union of the scopes in the
+                                    keystore line (4.3) and in the last commit whose
+                                    .sec/names still has the key, if there is one; -scope
+                                    GLOB,... adds to it. Searching wider is only noisier, never
+                                    a miss. If a form of the value is weak (6.5 check 6) and the
+                                    union is empty, it refuses until -scope is given   (keystore)
 key forget <name>                   drop the retired values of a key (4.3)   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
@@ -471,9 +485,20 @@ Needs the keystore.
 - `-install <root>` (usually `/`, under sudo) never writes through a symlink
   it was not told about. Every existing component below `<root>` on the way
   to a target must be a plain directory, or a symlink that the manifest of
-  the node declares as type `l` and whose resolved target is still under
-  `<root>`. Anything else is an error before the first write, so a staging
-  root with `etc -> /etc` cannot overwrite the live host. The check and the
+  the node declares as type `l` whose target, as `readlinkat` returns it,
+  is byte for byte the target in the repository, and which resolves under
+  `<root>`. A declared link that has drifted to another target is an error
+  even when the new target is under `<root>`: with root `/` almost every
+  target is, and following it would put a descendant type `s` or `d` entry
+  at an unrelated privileged path. `-install` does not repair it on its own;
+  `manifest apply -links` (6.8) replaces drifted declared links with the
+  declared target, after printing old and new, and only then can `-install`
+  go on. A declared link that is missing is created with the declared
+  target before any entry beneath it. A declared link whose target goes
+  through another symlink is accepted only if that one is declared and
+  intact too, by the same rule. Anything else is an error before the first
+  write, so a staging root with `etc -> /etc` cannot overwrite the live
+  host. The check and the
   write are the same walk over directory descriptors, as for `import`
   (6.3): with `openat2(RESOLVE_BENEATH)`, a declared symlink is resolved by
   hand and checked to stay under `<root>`. A symlink swapped in during the
@@ -559,8 +584,18 @@ given in brackets:
    counted line, each counted value) is searched under each single
    transform of 5.2 and the chains used in the repository (6.3 step 1),
    so a base64 or sha256 form of `abc123` from `app.env` is found too.
-   Weak forms follow the token rule above, within the scope of the type
-   `s` entries that name the secret file.
+   Weak forms follow the token rule above. The type `s` paths themselves
+   never exist in the tree (check 3), so the scope of a secret file is
+   something else: the `scope=GLOB,...` attribute of its type `s` entries
+   (4.4), or, for an entry without one, the directory of the entry and
+   everything below it (`nodes/n1/etc/app/**` for `nodes/n1/etc/app/app.env`),
+   where a copy of the value is most likely to land. Several entries naming
+   the same secret file give the union. A retired version keeps the scope
+   the file had when it was retired, stored next to it in
+   `retired-files/<name>.<timestamp>.<n>.scope`. A file in `files/` that no
+   type `s` entry names has no scope; `key check` reports it, like an
+   unknown key, and its weak forms are not searched until it is named or
+   forgotten.
 
    The report names the key or secret file, the file and the line, never
    the value.
@@ -599,7 +634,11 @@ because only the deploy machine runs check 6. The state holds:
   that adds or changes a transform, and any of these counts as a change.
   For every secret file, a digest of its name and of every form searched
   for it, again for the current version in `files/` and every retired one
-  in `retired-files/`. A version that was current and retired again
+  in `retired-files/`, together with its scope (the `scope=` attributes and
+  entry directories of its type `s` entries, 6.5 check 6) and which of its
+  forms are weak. A new type `s` entry naming an existing secret file
+  therefore changes the digest, and the file is checked against the whole
+  history in the paths it now covers. A version that was current and retired again
   between two clean runs (A, then B, then C) is still part of the set, so
   it is checked against the whole history like C. All digests are HMAC-SHA256 under a random
   256-bit key kept in its own file, `check.key` (mode 0600), not in
@@ -659,6 +698,9 @@ manifest apply -node <node> [path...]   set live attributes from the manifest, c
                                         symlink on the way is an error, and every change is made
                                         on the opened descriptor (fchmod, fchown, fsetxattr), never
                                         by path
+manifest apply -links -node <node>      replace declared type l links whose target has drifted
+                                        with the target in the repository, printing old and new;
+                                        a link only, never what it points to   (sudo)
 manifest fix                            add entries for new files, drop entries of deleted ones
 ```
 
