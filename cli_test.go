@@ -766,6 +766,13 @@ func TestCLIScanAllowFromAnywhere(t *testing.T) {
 		t.Errorf("a rule for the target hid the symlink:\n%s", out)
 	}
 	os.Remove(filepath.Join(r.dir, "alias.conf"))
+	// An absolute path through an alias of the checkout is still inside it.
+	alias := filepath.Join(t.TempDir(), "repo-alias")
+	os.Symlink(r.dir, alias)
+	r.write(".sec/allow", "path:/data/\n")
+	if out := run("", "scan", filepath.Join(alias, "data/ban/x/streets.csv")); strings.Contains(out, "streets") {
+		t.Errorf("absolute path through a checkout alias:\n%s", out)
+	}
 	// The manifest hint says to stage the manifest.
 	r.write("nodes/n1/etc/a.conf", "a=1\n")
 	r.must("git", "add", "-A")

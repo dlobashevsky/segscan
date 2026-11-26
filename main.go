@@ -301,8 +301,12 @@ func repoPath(f string) string {
 	}
 	// Only the current directory is resolved: the name itself, a symlink
 	// in the repository included, stays the repository entry being scanned.
-	abs := f
-	if !filepath.IsAbs(f) {
+	var abs string
+	if filepath.IsAbs(f) {
+		// An absolute path may reach the checkout through an alias:
+		// resolve its directory, keep its name.
+		abs = filepath.Join(canonical(filepath.Dir(f)), filepath.Base(f))
+	} else {
 		abs = filepath.Join(repoCwd(), f)
 	}
 	rel, err := filepath.Rel(top, abs)

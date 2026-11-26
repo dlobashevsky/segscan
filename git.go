@@ -191,10 +191,12 @@ func (a *allowList) skipPath(p string) bool {
 			switch {
 			case strings.Contains(pat, "**"):
 				ok = matchPath(pat, cand)
+			// path.Match, not filepath.Match: these are slash paths on every
+			// platform, and on Windows filepath.Match would let * cross "/".
 			case anchored || strings.Contains(pat, "/"):
-				ok, _ = filepath.Match(pat, cand)
+				ok, _ = path.Match(pat, cand)
 			default:
-				ok, _ = filepath.Match(pat, parts[i-1])
+				ok, _ = path.Match(pat, parts[i-1])
 			}
 			if ok {
 				return true
