@@ -286,7 +286,15 @@ remote are not reachable here and would never be searched, so before
 anything else `key forget` lists every ref of every configured remote
 (`git ls-remote`) and refuses, naming them, while any advertised object is
 missing locally; the user fetches, and the fetched commits are then
-covered like any other. If any ref moved backwards or was
+covered like any other. That listing cannot be atomic with the deletion: a
+push to the remote between the two is not seen. `key forget` therefore
+also asks for the value to be dead, not just unseen: it refuses unless the
+rotation that retired it is deployed (`drift` shows no node still using the
+value, 6.7), and it prints that the last remote listing was taken at a given
+time. A value forgotten under this rule can still turn up in such a
+late-pushed commit, but it is then a dead credential, not a live one; that
+residual is accepted, and the only way to avoid it entirely is never to
+forget (`key forget` is optional housekeeping). If any ref moved backwards or was
 rewritten, it runs the whole history again for those forms. So it does when
 the forms of the retired value differ from those the qualifying run
 searched: the digest of 6.5 changes on an ordinary forward update too,
@@ -985,7 +993,10 @@ text.
     (`/Encrypt`), or a stream with any other filter that is not an image
     codec, is "not fully scanned" (below); image codecs (`DCTDecode`,
     `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`) hold pixels, not text, and
-    their raw bytes are still searched as they are. A container is
+    their raw bytes are still searched as they are. In a PNG the
+    compressed text chunks (`zTXt`, and `iTXt` with the compression flag
+    set) are inflated and searched, like the plain `tEXt` and `iTXt` text
+    that is already in the raw bytes. A container is
     recognized anywhere in the file, not only at offset 0: a ZIP by its
     end-of-central-directory record, a gzip member by its header (`1f 8b
     08`) followed by a stream that inflates, a PDF by `%PDF-`. So a payload
