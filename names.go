@@ -170,13 +170,6 @@ func parseManifest(data []byte) ([]*mEntry, []lineProblem) {
 			case "secret":
 				check(e.Type == "s", "%s: secret= is only for type s", e.Path)
 				secret = v
-			case "scope":
-				check(e.Type == "s", "%s: scope= is only for type s", e.Path)
-				for _, g := range splitList(v) {
-					if err := checkGlob(g); err != nil {
-						check(false, "%s: %v", e.Path, err)
-					}
-				}
 			}
 		}
 		if e.Type == "s" {
