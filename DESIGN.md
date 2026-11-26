@@ -739,16 +739,20 @@ Needs the keystore.
 ### 6.5 `check`
 
 ```
-segscan check [--staged | --range A..B | --all]
+segscan check [-staged | -range REVS | -all] [-json] [-no-header]
 ```
 
-Blocking checks (exit 1):
+Without a flag it checks the working tree: tracked files and untracked files
+that are not ignored.
 
-1. **Grammar.** Every `!SECKEY_` is a well-formed placeholder (5.1) with
+Blocking checks (exit 1). The `check` column of the output names them as
+given in brackets:
+
+1. **Grammar** (`grammar`). Every `!SECKEY_` is a well-formed placeholder (5.1) with
    known transforms.
-2. **Names.** Every placeholder's name and uuid are in `names`, and are used
+2. **Names** (`names`). Every placeholder's name and uuid are in `names`, and are used
    inside its scope.
-3. **Manifest.** Every file under a node root has a manifest entry, and every
+3. **Manifest** (`manifest`). Every file under a node root has a manifest entry, and every
    type `f`/`l` entry has a file of that type: a symlink declared as `f`, a
    regular file declared as `l`, or a tracked file at a path declared as
    `d` is a finding, so a commit that `expand` would refuse is refused here
@@ -814,14 +818,24 @@ Blocking checks (exit 1):
    The report names the key or secret file, the file and the line, never
    the value.
 
-The first check that fails is reported with all its findings; the others
-still run.
+All checks run and all findings are reported, as TSV
+`commit file line col check message` or, with `-json`, JSON Lines. Errors in
+`.sec/config`, `names` and `manifest` themselves are findings too (check
+`config`, `names`, `manifest`). Files under `.sec/` are checked for private
+keys only, not for placeholders.
+
+Each commit is checked with the `.sec/config`, `names`, `manifest` and
+`allow` of that commit, and the index with those of the index, so an
+unstaged allowlist entry cannot hide a staged key. A commit without `.sec/`
+gets the grammar, forbidden-path and private-key checks only.
 
 Without the keystore, check 6 is skipped with a single line saying so.
 
-`--staged` checks the index (the pre-commit case). `--range` checks every
-commit in the range (pre-push). `--all` checks every commit reachable from
-any ref; run it on the deploy machine from time to time, because commits
+`-staged` checks the index (the pre-commit case). `-range` takes
+`git rev-list` arguments (`A..B`, `B --not --remotes`) and checks every
+commit they list (pre-push). `-all` checks every commit reachable from any
+ref. In both, a problem that many commits share is reported once, with the
+oldest commit that has it. Run `-all` run it on the deploy machine from time to time, because commits
 made elsewhere skipped check 6.
 
 `--all` keeps its state in the keystore directory (`check.state`, mode 0600),
@@ -872,7 +886,9 @@ On the next run:
 - binary files are scanned via their strings when `binary = scan` (8).
 
 New flag for `hook`: `-warn`. It prints the findings in the added lines and
-exits 0. `hook_scan = warn` makes it the default inside `.sec/`.
+exits 0. Inside `.sec/`, when `-warn` is not given, `hook_scan` decides:
+`warn` (the default) prints and exits 0, `block` blocks as before, `off`
+does nothing. An explicit `-warn` or `-warn=false` wins.
 
 `train` with the keystore available first runs check 6 on its input. If any
 value is present it stops, so a value never becomes a dictionary word.
@@ -1065,7 +1081,7 @@ and tests intact.
    - `init`, `key add|rm|list`, `manifest fix` (a new file takes owner,
      group and mode from the nearest parent directory entry of the same
      node, or `root:root 0600` if there is none, and is listed for review);
-   - `check` checks 1-5, `hook -warn`;
+   - `check` checks 1-5, `hook -warn`, the pre-commit and pre-push hooks;
    - `.sec/` defaults for `scan`/`hook`/`train`.
 3. **Keystore and transforms:**
    - the keystore reader with mode checks, `key set|check`;
@@ -1073,7 +1089,7 @@ and tests intact.
    - `check` check 6, the `train` guard.
 4. **Attributes:** `manifest pull|check|apply`, `expand -install` with atomic
    writes and attributes, type `s`.
-5. **Rest:** `drift`, binary scanning (8), `keys sync`, pre-push hook.
+5. **Rest:** `drift`, binary scanning (8), `keys sync`.
 
 ## 12. Decisions
 

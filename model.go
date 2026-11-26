@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -268,8 +269,12 @@ func loadModel(path string) (*Model, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return decodeModel(f, path)
+}
+
+func decodeModel(r io.Reader, path string) (*Model, error) {
 	m := &Model{}
-	if err := gob.NewDecoder(f).Decode(m); err != nil {
+	if err := gob.NewDecoder(r).Decode(m); err != nil {
 		return nil, fmt.Errorf("%s: %v", path, err)
 	}
 	if m.Version != modelVersion {
@@ -284,11 +289,7 @@ func (m *Model) save(path string) error {
 	if err := gob.NewEncoder(&buf).Encode(m); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicWrite(path, buf.Bytes(), 0o644)
 }
 
 // ---------- training ----------
@@ -302,6 +303,8 @@ type fragStat struct {
 const listWordBits = 18 // cost of a word known only from a list
 
 type trainer struct {
+	skip   int // spans to leave out, as Opts.Skip
+	blank  []byte
 	frag   map[string]*fragStat
 	tokens uint64
 	files  int
@@ -351,6 +354,7 @@ func (t *trainer) addWords(data []byte) {
 
 // addLine collects and counts the letter fragments (words) of a line.
 func (t *trainer) addLine(s []byte) {
+	s = blankSpans(s, &t.blank, t.skip)
 	t.a = annotate(s, t.a)
 	fs := -1
 	flush := func(end int) {
@@ -459,6 +463,13 @@ type pemState struct{ in bool }
 // feed reports whether to skip the line and whether it starts a private key.
 func (p *pemState) feed(line []byte) (skip, private bool) {
 	if p.in {
+		// A private key marker counts even inside a block that was never
+		// closed, or an unterminated certificate would hide the key after it.
+		if i := bytes.Index(line, []byte("-----BEGIN ")); i >= 0 {
+			private = bytes.Contains(line[i:], []byte("PRIVATE KEY"))
+			p.in = !bytes.Contains(line[i:], []byte("-----END "))
+			return true, private
+		}
 		if bytes.Contains(line, []byte("-----END ")) {
 			p.in = false
 		}

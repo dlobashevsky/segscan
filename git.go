@@ -121,7 +121,7 @@ func hunkRange(b []byte) (start, n int) {
 var defaultExcludes = []string{
 	"go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
 	"composer.lock", "poetry.lock", "Gemfile.lock", "*.lock", "*.min.js", "*.min.css", "*.map",
-	".segscan-allow",
+	".segscan-allow", ".sec/allow",
 }
 
 type allowList struct {
@@ -139,6 +139,12 @@ func loadAllow(path string, defaults bool) *allowList {
 	if err != nil {
 		return a
 	}
+	a.add(data)
+	return a
+}
+
+// add reads allowlist lines: an fp, or path:glob; # starts a comment.
+func (a *allowList) add(data []byte) {
 	for _, l := range strings.Split(string(data), "\n") {
 		if i := strings.IndexByte(l, '#'); i >= 0 {
 			l = l[:i]
@@ -153,7 +159,6 @@ func loadAllow(path string, defaults bool) *allowList {
 			a.fp[strings.ToLower(f[0])] = true
 		}
 	}
-	return a
 }
 
 func (a *allowList) skipPath(p string) bool {

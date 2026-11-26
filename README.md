@@ -115,6 +115,32 @@ To add your own words (transliteration, internal abbreviations):
 - Secrets split by whitespace or quotes.
 - Binary files (a NUL in the first 8000 bytes skips the file).
 
+## Configuration repositories
+
+A repository with a `.sec/` directory keeps its credentials out of git:
+files hold placeholders such as `!SECKEY_ch_sts_<uuid>!`, and the values live
+in a keystore outside the repository. The full design is in
+[DESIGN.md](DESIGN.md). What works now (no keystore needed):
+
+    segscan init                       # .sec/, and core.hooksPath -> .sec/hooks
+    segscan key add ch_sts -scope 'nodes/*/etc/nginx/**'
+                                       # prints the placeholder to use
+    segscan key list                   # keys and where they are used
+    segscan manifest fix               # owner, group, mode for new files under nodes/*
+    segscan check                      # blocking checks of the working tree
+    segscan check -staged | -range A..B | -all
+
+`check` blocks on malformed placeholders, unknown keys or uuids, keys used
+outside their scope, files without a manifest entry, forbidden paths
+(`forbid` in `.sec/config`, the keystore) and private keys. The pre-commit
+hook installed by `init` runs `check -staged` and then the statistical scan
+of the added lines as a warning; the pre-push hook runs `check -range`.
+
+Inside `.sec/` the model is `.sec/segscan.model`, the allowlist
+`.sec/allow`, and placeholders and UUIDs are not scored (`skip_uuids` in
+`.sec/config`). Elsewhere `-skip-uuids` does the same; without it nothing
+changes.
+
 ## Data behind the built-in model
 
 - Go sources (BSD-3-Clause);
