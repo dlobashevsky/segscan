@@ -650,3 +650,17 @@ func TestCLISparseCheckout(t *testing.T) {
 		t.Errorf("key rm removed a key still used in a sparse file\n%s", errs)
 	}
 }
+
+// A node root must be a directory: a submodule or file at nodes/n1 itself
+// would hide everything below it from check.
+func TestCLINodeRootNotADirectory(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	r.must("git", "add", ".sec")
+	r.must("git", "commit", "-q", "--no-verify", "-m", "base")
+	commit := strings.TrimSpace(r.must("git", "rev-parse", "HEAD"))
+	r.must("git", "update-index", "--add", "--cacheinfo", "160000,"+commit+",nodes/n1")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "nodes/n1\t0\t0\tmanifest\ta node root must be a directory") {
+		t.Errorf("gitlink at a node root: exit %d\n%s", code, out)
+	}
+}

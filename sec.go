@@ -195,6 +195,16 @@ func (c *secConfig) nodeRoot(p string) (string, bool) {
 	return "", false
 }
 
+// isNodeRoot reports whether p itself is a node root path (nodes/n1).
+func (c *secConfig) isNodeRoot(p string) bool {
+	for _, r := range c.Roots {
+		if matchSegs(strings.Split(strings.Trim(r, "/"), "/"), strings.Split(p, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
 // ---------- globs ----------
 
 // matchPath reports whether a repository path matches a glob. A pattern

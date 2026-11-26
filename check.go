@@ -465,7 +465,11 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 			add(f.Path, 0, 0, ckForbidden, "matches forbid = %s", pat)
 		}
 		inSec := strings.HasPrefix(f.Path, secDir+"/")
-		if hasSec && !inSec {
+		if hasSec && !inSec && cfg.isNodeRoot(f.Path) {
+			// A file, symlink or submodule at nodes/n1 itself: a node root
+			// must be a directory, or nothing below it would be checked.
+			add(f.Path, 0, 0, ckManifest, "a node root must be a directory")
+		} else if hasSec && !inSec {
 			if _, ok := cfg.nodeRoot(f.Path); ok && f.Gitlink {
 				add(f.Path, 0, 0, ckManifest, "a submodule under a node root cannot be described by the manifest")
 			} else if ok {
