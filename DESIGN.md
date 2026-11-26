@@ -654,7 +654,12 @@ Needs the keystore.
   still created. The staging tree then holds every entry, and nothing is
   ever written outside `dir`.
 - `-install <root>` (usually `/`, under sudo) never writes through a symlink
-  it was not told about. Every existing component below `<root>` on the way
+  it was not told about. `<root>` itself is opened component by component
+  from a descriptor of `/`, with `O_NOFOLLOW` on every component, and that
+  descriptor is the one every preflight check and every write is relative
+  to; a `<root>` below a user-writable directory cannot be swapped for a
+  link to `/` between the check and the write. `-to <dir>` pins `dir` the
+  same way. Every existing component below `<root>` on the way
   to a target must be a plain directory, or a symlink that the manifest of
   the node declares as type `l` whose target, as `readlinkat` returns it,
   is byte for byte the target in the repository, and which resolves under
@@ -939,10 +944,13 @@ text.
     (`/Encrypt`), or a stream with any other filter that is not an image
     codec, is "not fully scanned" (below); image codecs (`DCTDecode`,
     `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`) hold pixels, not text, and
-    their raw bytes are still searched as they are. A ZIP is recognized by
-    its end-of-central-directory record, not by `PK` at offset 0, so a ZIP
-    behind a prefix (a self-extracting executable, a JAR with a launcher
-    script) is unpacked too;
+    their raw bytes are still searched as they are. A container is
+    recognized anywhere in the file, not only at offset 0: a ZIP by its
+    end-of-central-directory record, a gzip member by its header (`1f 8b
+    08`) followed by a stream that inflates, a PDF by `%PDF-`. So a payload
+    behind a prefix (a self-extracting shell script or executable, a JAR
+    with a launcher script) is unpacked too. A header that is found but
+    does not decode is "not fully scanned", like any failed unpack;
   - a file in another common compressed or archive format that segscan does
     not unpack (xz, zstd, bzip2, 7z, rar, recognized by its magic bytes,
     also when they follow an executable prefix as in a self-extracting
