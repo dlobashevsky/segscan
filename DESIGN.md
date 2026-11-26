@@ -143,8 +143,12 @@ hook_scan   = warn             # warn | block | off: the statistical part of the
 forbid      = .htpasswd*, *.key, id_rsa*, id_ed25519*   # paths that may never be committed
 ```
 
-The keystore path (from `keystore` or `$SEGSCAN_KEYSTORE`) may not contain
-`.` or `..` components: a path that climbs out of the repository and back
+The keystore must be outside the repository (3.2). Every command that opens
+or creates it resolves its path first and refuses one that is the
+repository or lies inside it, before reading or writing anything there;
+`check` reports such a configuration as a `config` finding. The keystore
+path (from `keystore` or `$SEGSCAN_KEYSTORE`) may not contain `.` or `..`
+components either: a path that climbs out of the repository and back
 in could land, in a commit, somewhere the working tree's symlinks hide,
 and `check` could not tell that the keystore is inside the repository.
 
@@ -259,10 +263,12 @@ forms look.
 
 Secret files are kept the same way. When `import -secret <name>` replaces
 `files/<name>`, the old content moves to
-`retired-files/<name>.<UTC timestamp>.<n>`, created with `O_EXCL` and the
-next free `<n>`, so a second replacement on the same day or second never
-overwrites an earlier retired version
-(mode 0600). Check 6 searches it like a current secret file, and
+`retired-files/<name>.<UTC timestamp>.<rotation>`, created with `O_EXCL`
+(mode 0600). `<rotation>` is a new random rotation id, as for a retired
+key (above): a second retirement in the same second, a clock set back, or
+the same content retired again after `key forget -secret` always gets a
+name, and an id, that no earlier version had, so an old clean run in
+`check.state` never stands for a new retirement. Check 6 searches it like a current secret file, and
 `key forget -secret <name>` drops it under the same condition. A secret
 file that no type `s` entry names any more is retired with
 `key retire -secret <name>` (6.2); until then `key check` reports it, like
@@ -691,7 +697,10 @@ given in brackets:
    any path. No secret file from `files/` is in the repository, under any
    path:
    - a file that contains the whole content of a (non-empty) secret file anywhere, as
-     a substring of its raw or unpacked bytes, is a finding. Equality alone
+     a substring of its raw or unpacked bytes, is a finding, if that
+     content is a strong form by the rule above. A secret file whose whole
+     content is weak (`true`, `0`) is reported by `key check -weak` like a
+     weak key and not searched as a whole. Equality alone
      would miss a secret file with only short lines (`abc123\nxyz789`)
      that was embedded in another file or had a byte appended. This also
      covers binary secret files such as a PKCS#12 bundle;
