@@ -267,6 +267,10 @@ type phAt struct {
 type fileInfo struct {
 	phs   []phAt
 	finds []checkFinding // without Commit and File
+
+	known    []checkFinding // check 6, once the matcher is built
+	notFully string         // why check 6 could not read all of a binary file
+	knownSet bool
 }
 
 func isBinary(data []byte) bool {
@@ -326,8 +330,10 @@ func analyzeFile(data []byte) *fileInfo {
 // ---------- checks over one snapshot ----------
 
 type checker struct {
-	top   string
-	cache map[string]*fileInfo
+	top    string
+	cache  map[string]*fileInfo
+	chains map[string]bool // transform chains of every placeholder seen
+	known  *kvMatcher      // check 6; nil without the keystore
 }
 
 func (ck *checker) info(s *snapshot, f snapFile) *fileInfo {
@@ -341,10 +347,61 @@ func (ck *checker) info(s *snapshot, f snapFile) *fileInfo {
 		die(err)
 	}
 	fi := analyzeFile(data)
+	for _, p := range fi.phs {
+		if len(p.Transforms) > 0 {
+			ck.chains[strings.Join(p.Transforms, ":")] = true
+		}
+	}
+	if ck.known != nil {
+		fi.known, fi.notFully = ck.known.knownFindings(f.Path, data)
+		fi.knownSet = true
+	}
 	if f.OID != "" {
 		ck.cache[f.OID] = fi
 	}
 	return fi
+}
+
+// runKnown is check 6 over one snapshot, after the matcher is built.
+func (ck *checker) runKnown(s *snapshot) []checkFinding {
+	allow := &allowList{fp: map[string]bool{}}
+	allow.add(s.file(secDir + "/allow"))
+	var out []checkFinding
+	for _, f := range s.Files {
+		if f.Link || f.Gitlink {
+			continue
+		}
+		fi := ck.info(s, f)
+		if !fi.knownSet { // cached before the matcher existed
+			data, err := s.read(f)
+			if err != nil {
+				die(err)
+			}
+			fi.known, fi.notFully = ck.known.knownFindings(f.Path, data)
+			fi.knownSet = true
+		}
+		for _, x := range fi.known {
+			x.Commit, x.File = s.Commit, f.Path
+			out = append(out, x)
+		}
+		if fi.notFully != "" && !allowedBinary(allow, f.Path) {
+			out = append(out, checkFinding{Commit: s.Commit, File: f.Path, Check: ckKnown,
+				Msg: "binary file not fully scanned (" + fi.notFully + "); to keep it, add path:" + f.Path + " to .sec/allow"})
+		}
+	}
+	return out
+}
+
+func allowedBinary(a *allowList, p string) bool {
+	if a.skipPath(p) {
+		return true
+	}
+	for _, pat := range a.paths {
+		if matchPath(pat, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ck *checker) run(s *snapshot) []checkFinding {
@@ -615,6 +672,28 @@ func relBelowTop(top, p string) (string, bool) {
 
 // ---------- the command ----------
 
+// checkKeystore opens the keystore for check 6 with a shared lock. Without
+// one it says why check 6 is skipped; a keystore that exists but cannot be
+// trusted (modes, owner, a symlink) is an error, not a skip.
+func checkKeystore(top string) (*keystore, string) {
+	cfg, err := loadSecConfig(top)
+	if err != nil {
+		return nil, "the working tree's .sec/config is broken"
+	}
+	ks, err := openKeystore(cfg, top, false, false)
+	if err == errNoKeystore {
+		return nil, "no keystore at " + cfg.keystoreDir()
+	}
+	if bad, ok := err.(badKeystorePath); ok {
+		return nil, bad.Error()
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "segscan: keystore:", err)
+		os.Exit(2)
+	}
+	return ks, ""
+}
+
 func cmdCheck(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	staged := fs.Bool("staged", false, "check the index (pre-commit)")
@@ -638,51 +717,85 @@ func cmdCheck(args []string) {
 	if top == "" {
 		die(fmt.Errorf("no %s/ in this repository: run segscan init", secDir))
 	}
-	ck := &checker{top: top, cache: map[string]*fileInfo{}}
-	var finds []checkFinding
-	switch {
-	case *staged || *rng != "" || *all:
-		cf, err := newCatFile(top)
-		if err != nil {
+	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
+	var cf *catFile
+	if *staged || *rng != "" || *all {
+		var err error
+		if cf, err = newCatFile(top); err != nil {
 			die(err)
 		}
 		defer cf.close()
-		if *staged {
-			s, err := indexSnapshot(top, cf)
-			if err != nil {
-				die(err)
-			}
-			finds = ck.run(s)
-			break
-		}
+	}
+	// The snapshots to check, produced again for the second pass.
+	var commits []string
+	if *rng != "" || *all {
 		revArgs := []string{"rev-list", "--reverse", "--all"}
 		if *rng != "" {
 			revArgs = append([]string{"rev-list", "--reverse"}, strings.Fields(*rng)...)
 		}
-		commits, err := gitOut(append([]string{"-C", top}, revArgs...)...)
+		out, err := gitOut(append([]string{"-C", top}, revArgs...)...)
 		if err != nil {
 			die(fmt.Errorf("git %s: %v", strings.Join(revArgs, " "), err))
 		}
-		seen := map[string]bool{}
-		for _, c := range strings.Fields(commits) {
-			s, err := commitSnapshot(top, cf, c)
-			if err != nil {
-				die(err)
-			}
-			for _, f := range ck.run(s) {
-				key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.Check, f.File, f.Line, f.Col, f.Msg)
-				if !seen[key] { // the oldest commit that has it
-					seen[key] = true
-					finds = append(finds, f)
+		commits = strings.Fields(out)
+	}
+	each := func(fn func(*snapshot)) {
+		var s *snapshot
+		var err error
+		switch {
+		case *staged:
+			s, err = indexSnapshot(top, cf)
+		case commits != nil || *rng != "" || *all:
+			for _, c := range commits {
+				if s, err = commitSnapshot(top, cf, c); err != nil {
+					die(err)
 				}
+				fn(s)
 			}
+			return
+		default:
+			s, err = worktreeSnapshot(top)
 		}
-	default:
-		s, err := worktreeSnapshot(top)
 		if err != nil {
 			die(err)
 		}
-		finds = ck.run(s)
+		fn(s)
+	}
+	var finds []checkFinding
+	seen := map[string]bool{}
+	collect := func(fs []checkFinding) {
+		for _, f := range fs {
+			key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.Check, f.File, f.Line, f.Col, f.Msg)
+			if !seen[key] { // the oldest commit that has it
+				seen[key] = true
+				finds = append(finds, f)
+			}
+		}
+	}
+	each(func(s *snapshot) { collect(ck.run(s)) })
+
+	// Check 6 needs the chains in use before its patterns exist, so it is a
+	// second pass; files read by blob id are not read again.
+	ks, why := checkKeystore(top)
+	if ks != nil {
+		defer ks.close()
+		if head, err := gitOut("-C", top, "rev-parse", "-q", "--verify", "HEAD^{commit}"); err == nil {
+			if cf == nil {
+				if cf, err = newCatFile(top); err != nil {
+					die(err)
+				}
+				defer cf.close()
+			}
+			if s, err := commitSnapshot(top, cf, strings.TrimSpace(head)); err == nil {
+				for _, f := range s.Files {
+					if !f.Link && !f.Gitlink {
+						ck.info(s, f)
+					}
+				}
+			}
+		}
+		ck.known = buildMatcher(ks, ck.chains)
+		each(func(s *snapshot) { collect(ck.runKnown(s)) })
 	}
 	if *rng == "" && !*all {
 		sort.SliceStable(finds, func(i, j int) bool {
@@ -703,7 +816,9 @@ func cmdCheck(args []string) {
 		}
 		fmt.Printf("%s\t%s\t%d\t%d\t%s\t%s\n", f.Commit, escape(f.File), f.Line, f.Col, f.Check, escape(f.Msg))
 	}
-	fmt.Fprintln(os.Stderr, "segscan: known values not checked: keystore support is not implemented yet")
+	if why != "" {
+		fmt.Fprintln(os.Stderr, "segscan: known values not checked: "+why)
+	}
 	if len(finds) > 0 {
 		fmt.Fprintf(os.Stderr, "segscan: %d problem(s)\n", len(finds))
 		os.Exit(1)

@@ -120,8 +120,9 @@ To add your own words (transliteration, internal abbreviations):
 A repository with a `.sec/` directory keeps its credentials out of git:
 files hold placeholders such as `!SECKEY_ch_sts_<uuid>!`, and the values live
 in a keystore outside the repository. How to use it today is in
-[MANUAL.md](MANUAL.md); the full design is in [DESIGN.md](DESIGN.md). What
-works now (no keystore needed):
+[MANUAL.md](MANUAL.md); the full design is in [DESIGN.md](DESIGN.md).
+
+Anywhere (no keystore needed):
 
     segscan init                       # .sec/, and core.hooksPath -> .sec/hooks
     segscan key add ch_sts -scope 'nodes/*/etc/nginx/**'
@@ -131,11 +132,22 @@ works now (no keystore needed):
     segscan check                      # blocking checks of the working tree
     segscan check -staged | -range A..B | -all
 
+On the deploy machine (with the keystore):
+
+    segscan key set ch_sts [-gen 32]   # a value from stdin, or a random base58 one
+    segscan key check [-weak]          # names <-> keystore
+    sudo segscan import -node n1 /etc/nginx/nginx.conf
+                                       # live file -> tree, values -> placeholders
+    segscan expand -node n1 -to /srv/stage/n1
+                                       # tree -> staging directory, placeholders -> values
+
 `check` blocks on malformed placeholders, unknown keys or uuids, keys used
 outside their scope, files without a manifest entry, forbidden paths
-(`forbid` in `.sec/config`, the keystore) and private keys. The pre-commit
-hook installed by `init` runs `check -staged` and then the statistical scan
-of the added lines as a warning; the pre-push hook runs `check -range`.
+(`forbid` in `.sec/config`, the keystore) and private keys; with the
+keystore, also on any known value (current or retired, in any of its
+forms, in text, binary files, gzip and ZIP). The pre-commit hook installed
+by `init` runs `check -staged` and then the statistical scan of the added
+lines as a warning; the pre-push hook runs `check -range`.
 
 Inside `.sec/` the model is `.sec/segscan.model`, the allowlist
 `.sec/allow`, and placeholders and UUIDs are not scored (`skip_uuids` in

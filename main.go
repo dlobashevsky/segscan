@@ -34,9 +34,17 @@ Configuration repositories (a .sec/ directory, see DESIGN.md):
   segscan key add <name> [-scope GLOB,...]
                                         add a key name, print its placeholder
   segscan key rm <name> | key list      remove an unused key / list keys and their uses
+  segscan key set <name> [-gen N]       set a value (stdin, or N random base58 chars)   (keystore)
+  segscan key check [-weak]             names <-> keystore consistency   (keystore)
+  segscan key retire [-secret] <name>   retire a value that no name uses any more   (keystore)
   segscan check [-staged|-range REVS|-all]
                                         blocking checks: placeholders, names, manifest,
-                                        forbidden paths, private keys (default: working tree)
+                                        forbidden paths, private keys, and with the
+                                        keystore known values (default: working tree)
+  segscan expand [-n] -node N -to DIR [path...]
+                                        the node's files with placeholders resolved   (keystore)
+  segscan import [-n] -node N [-secret NAME] [-accept NAME] [-form FILE:LINE=T] /path...
+                                        live files into the tree, values -> placeholders   (keystore)
   segscan manifest fix                  add manifest entries for new files, drop deleted ones
 
 Flags for scan/diff/hook/calib:
@@ -176,6 +184,10 @@ func main() {
 		cmdCheck(args)
 	case "manifest":
 		cmdManifest(args)
+	case "expand":
+		cmdExpand(args)
+	case "import":
+		cmdImport(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -276,7 +288,9 @@ func cmdTrain(args []string) {
 	if *words != "" {
 		lists = strings.Split(*words, ",")
 	}
-	m := train(filesOrGit(fs.Args()), loadAllow(c.allow, !c.noDef), *top, c.o.Skip, lists...)
+	files := filesOrGit(fs.Args())
+	trainGuard(c, files, lists)
+	m := train(files, loadAllow(c.allow, !c.noDef), *top, c.o.Skip, lists...)
 	path := modelPath(c.model)
 	if abs, err := filepath.Abs(path); err == nil && c.top != "" {
 		if err := repoDir(c.top, filepath.Dir(abs)); err != nil {
@@ -290,6 +304,37 @@ func cmdTrain(args []string) {
 		path, m.Files, m.Tokens, len(m.Words))
 	if m.Tokens < 200000 {
 		fmt.Fprintln(os.Stderr, "segscan: small corpus, expect many false positives: train on several repositories")
+	}
+}
+
+// trainGuard: inside a .sec/ repository with the keystore available, no
+// known value may become a dictionary word (DESIGN.md 6.6). Check 6 runs on
+// every input first, and any finding stops training.
+func trainGuard(c *common, files, lists []string) {
+	if c.top == "" {
+		return
+	}
+	ks, why := checkKeystore(c.top)
+	if ks == nil {
+		fmt.Fprintln(os.Stderr, "segscan: train: known values not checked: "+why)
+		return
+	}
+	defer ks.close()
+	m := buildMatcher(ks, nil)
+	n := 0
+	for _, f := range append(append([]string{}, lists...), files...) {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		found, _ := m.knownFindings(f, data)
+		for _, x := range found {
+			fmt.Fprintf(os.Stderr, "segscan: train: %s:%d:%d: %s\n", f, x.Line, x.Col, x.Msg)
+			n++
+		}
+	}
+	if n > 0 {
+		die(fmt.Errorf("train: %d known value(s) in the input; remove them before training", n))
 	}
 }
 
