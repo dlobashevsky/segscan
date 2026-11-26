@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -164,21 +165,50 @@ func (a *allowList) add(data []byte) {
 	}
 }
 
+// skipPath reports whether a path:<glob> line covers the repository path p,
+// the way .gitignore does: a glob that matches a directory on the way
+// covers everything below it (path:data/*, path:data/ban/, path:vendor); a
+// glob without "/" is matched against each name on the path, one with "/"
+// against the path from the repository top; "**" stands for any depth.
 func (a *allowList) skipPath(p string) bool {
-	base := filepath.Base(p)
+	p = cleanRel(p)
+	parts := strings.Split(p, "/")
 	for _, pat := range a.paths {
-		if ok, _ := filepath.Match(pat, base); ok {
-			return true
+		dirOnly := strings.HasSuffix(pat, "/")
+		// A leading "/" anchors the glob at the repository top, as in
+		// .gitignore: path:/data/ is data/ at the top only.
+		anchored := strings.HasPrefix(pat, "/")
+		pat = strings.TrimSuffix(cleanRel(strings.TrimLeft(pat, "/")), "/")
+		if pat == "" || pat == "." {
+			continue
 		}
-		if ok, _ := filepath.Match(pat, p); ok {
-			return true
-		}
-		if strings.HasSuffix(pat, "/") && strings.HasPrefix(p, pat) {
-			return true
-		}
-		if strings.Contains(pat, "**") && matchPath(pat, p) {
-			return true
+		for i := len(parts); i >= 1; i-- {
+			if dirOnly && i == len(parts) {
+				continue // a directory pattern never names the file itself
+			}
+			cand := strings.Join(parts[:i], "/")
+			var ok bool
+			switch {
+			case strings.Contains(pat, "**"):
+				ok = matchPath(pat, cand)
+			// path.Match, not filepath.Match: these are slash paths on every
+			// platform, and on Windows filepath.Match would let * cross "/".
+			case anchored || strings.Contains(pat, "/"):
+				ok, _ = path.Match(pat, cand)
+			default:
+				ok, _ = path.Match(pat, parts[i-1])
+			}
+			if ok {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// cleanRel turns a path as typed (./data/x, data//x) into the form the
+// allowlist is written in.
+func cleanRel(p string) string {
+	p = path.Clean(filepath.ToSlash(p))
+	return strings.TrimPrefix(p, "./")
 }

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const usage = `segscan - statistical secret scanner
@@ -264,6 +265,57 @@ func expand(paths []string) []string {
 	return out
 }
 
+var repoTop = func() func() string {
+	var once sync.Once
+	var top string
+	return func() string {
+		once.Do(func() {
+			if t, err := gitOut("rev-parse", "--show-toplevel"); err == nil {
+				top = canonical(t)
+			}
+		})
+		return top
+	}
+}()
+
+var repoCwd = func() func() string {
+	var once sync.Once
+	var cwd string
+	return func() string {
+		once.Do(func() {
+			wd, _ := os.Getwd()
+			cwd = canonical(wd)
+		})
+		return cwd
+	}
+}()
+
+// repoPath gives a file named on the command line or by git ls-files (both
+// relative to the current directory) as a path from the repository top, the
+// form path:<glob> lines are written in. Outside a repository, or for a file
+// outside it, the path is only cleaned.
+func repoPath(f string) string {
+	top := repoTop()
+	if top == "" {
+		return cleanRel(f)
+	}
+	// Only the current directory is resolved: the name itself, a symlink
+	// in the repository included, stays the repository entry being scanned.
+	var abs string
+	if filepath.IsAbs(f) {
+		// An absolute path may reach the checkout through an alias:
+		// resolve its directory, keep its name.
+		abs = filepath.Join(canonical(filepath.Dir(f)), filepath.Base(f))
+	} else {
+		abs = filepath.Join(repoCwd(), f)
+	}
+	rel, err := filepath.Rel(top, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return cleanRel(f)
+	}
+	return cleanRel(rel)
+}
+
 func filesOrGit(paths []string) []string {
 	if len(paths) > 0 {
 		return expand(paths)
@@ -288,7 +340,7 @@ func train(files []string, allow *allowList, top, skip int, lists ...string) *Mo
 		t.addWords(data)
 	}
 	for _, f := range files {
-		if allow.skipPath(f) {
+		if allow.skipPath(repoPath(f)) {
 			continue
 		}
 		if data, ok := readText(f); ok {
@@ -504,7 +556,7 @@ func cmdScan(args []string) {
 		s.data("<stdin>", data)
 	} else {
 		for _, f := range filesOrGit(fs.Args()) {
-			if allow.skipPath(f) {
+			if allow.skipPath(repoPath(f)) {
 				continue
 			}
 			if data, ok := readText(f); ok {

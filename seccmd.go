@@ -471,4 +471,7 @@ func manifestFix(args []string) {
 		writeFile(top, secPath(top, "manifest"), formatManifest(keep))
 	}
 	fmt.Fprintf(os.Stderr, "segscan: manifest: %d added, %d removed\n", added, removed)
+	if added+removed > 0 {
+		fmt.Fprintf(os.Stderr, "segscan: review %s/manifest, then git add %s/manifest: the hook checks what is staged\n", secDir, secDir)
+	}
 }

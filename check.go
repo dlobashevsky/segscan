@@ -569,7 +569,7 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 				}
 				switch {
 				case e == nil:
-					add(f.Path, 0, 0, ckManifest, "no manifest entry (segscan manifest fix)")
+					add(f.Path, 0, 0, ckManifest, "no manifest entry (segscan manifest fix, then git add .sec/manifest)")
 				case e.Type == "s":
 					add(f.Path, 0, 0, ckManifest, "a secret file (type s) must not be in the repository")
 				case e.Type != want:
