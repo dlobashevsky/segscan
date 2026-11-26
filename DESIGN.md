@@ -94,6 +94,25 @@ to read them. Under sudo the invoking user is the one in `$SUDO_UID`: `~`
 in the keystore path is that user's home, and files owned by that user or
 by root are accepted. The mode checks stay the same.
 
+That user can change everything in the keystore while segscan runs as
+root, so no keystore file is ever opened by path, for reading or writing:
+- the keystore directory is opened once, `O_DIRECTORY | O_NOFOLLOW` on its
+  last component, and `fstat` on the descriptor must show a directory of
+  mode 0700 owned by the invoking user. Root is not accepted for the
+  directory itself, so `~/.secshell/<project> -> /root` is refused;
+- every file in it (`keys`, `retired`, `pending`, `files.meta`, `check.state`,
+  `check.key`) and `files/` and `retired-files/` are opened from that
+  descriptor with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`
+  (otherwise `openat(O_NOFOLLOW)`), and checked with `fstat` on the opened
+  descriptor: a regular file (or directory), owner and mode as above, and
+  one link, so neither a symlink nor a hard link to a file of root's is
+  followed. Only then is it read, or written;
+- a file that is replaced is written to a new temporary name created with
+  `O_EXCL` in the same directory descriptor and moved with `renameat`,
+  which replaces the directory entry and never writes through it. The one
+  file written in place is `retired` (`O_APPEND`), and only after the
+  checks above on the descriptor that is written.
+
 The keystore is not kept under `.gitignore` inside the tree: `git add -f`,
 `git clean -fdx`, a `tar` or `rsync` of the tree, and IDE indexing all go
 around `.gitignore`. A symlink `.sec/keys -> ~/.secshell/<project>` is
@@ -232,7 +251,7 @@ overwrites an earlier retired version
 (mode 0600). Its scope (6.5 check 6) is written next to it as
 `<name>.<UTC timestamp>.<n>.scope`; a retired name always ends in a
 number, so the two never collide. Check 6 searches it like a current secret
-file, and `key forget <name>` drops it under the same condition.
+file, and `key forget -secret <name>` drops it under the same condition.
 
 `files.meta` holds the scope of each current file in `files/`, one
 `<name> TAB <scope>` line, written by `import -secret` and widened by
@@ -243,7 +262,7 @@ that differs from the scope the manifest gives now. A secret file that no
 type `s` entry names any more is retired with `key retire -secret <name>`
 (6.2): the current file moves to `retired-files/` with the union of the
 scope in `files.meta`, the scope in the last commit whose manifest still
-named it, and any `-scope`. From there it leaves only through `key forget`
+named it, and any `-scope`. From there it leaves only through `key forget -secret`
 with its clean-history gate.
 
 ### 4.4 `.sec/manifest`
@@ -398,8 +417,11 @@ key retire <name>                   move the current value of a key that is no l
 key retire -secret <name>           the same for a file in files/ that no type s entry names:
                                     it moves to retired-files/ with its former scope (4.3),
                                     durably before files/<name> is removed   (keystore)
-key forget <name>                   drop the retired values of a key, or the retired versions
-                                    of a secret file (4.3)   (keystore)
+key forget <name>                   drop the retired values of a key (4.3)   (keystore)
+key forget -secret <name>           drop the retired versions of a secret file (4.3). Keys and
+                                    secret files are separate namespaces (a key and a file may
+                                    both be called htpasswd), so every command that can act on
+                                    either takes -secret for the file   (keystore)
 key list                            names, scopes, where each is used, and how often
 key check [-weak]                   names <-> keystore: missing values, unknown keys, uuid mismatches;
                                     -weak: values the cost model finds guessable   (keystore)
