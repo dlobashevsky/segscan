@@ -171,6 +171,11 @@ it as "retired value of <name>". A retired value leaves the file only with
 the value was retired, and that run found no form of it in any reachable
 commit. A run that merely happened is not enough: if it reported the value,
 the leak is still there and the retired value is what keeps finding it.
+Refs can also move after that run (a fetch brings a commit with the old
+value). So `key forget` itself checks the retired forms against every
+commit reachable now that the qualifying run did not cover, and drops the
+value only if that comes out clean too. If any ref moved backwards or was
+rewritten, it runs the whole history again for those forms.
 
 Secret files are kept the same way. When `import -secret <name>` replaces
 `files/<name>`, the old content moves to
@@ -392,9 +397,16 @@ The steps:
 4. Round trip: the rewritten file is expanded in memory and must equal the
    original byte for byte. If it does not, nothing is written.
 5. It reports per key: number of occurrences and files. A short value
-   matches ordinary text as well, and a rotation would then change unrelated
-   lines. A key whose value is short or cheap under the cost model, or that
-   is replaced in an unexpected file, is listed as a warning.
+   matches ordinary text as well (`on`, `0`, `true`), and the round trip
+   cannot tell: the placeholders expand back to the same bytes until a
+   rotation turns unrelated text into the new credential. So for a key whose
+   value is shorter than 8 bytes or cheap under the cost model, `import`
+   stops, writes nothing, and lists every place it would replace. The user
+   either narrows the key's scope, writes the placeholders by hand, or
+   confirms the list with `-accept <name>` for this run. This is not a
+   requirement on the value, which stays whatever it is; it only keeps a
+   short one from being replaced blindly. A key replaced in a file where it
+   never was before is listed as a warning.
 6. It records the file's type, mode, owner, group, ACL, xattrs and SELinux
    context in the manifest.
 7. It runs the statistical scanner on the result and prints the number of
@@ -406,7 +418,8 @@ The steps:
 
 A file that holds no placeholders after import is still listed in the
 manifest. A path given with `-secret <name>` is not copied into the tree:
-its content goes to `files/<name>` in the keystore and the manifest gets a
+its content goes to `files/<name>` in the keystore (an empty file is an
+error: as a substring it would match everywhere) and the manifest gets a
 type `s` entry. `-n` prints what would change without writing.
 
 Binary files are copied as they are, without replacement, and scanned (8).
@@ -491,7 +504,7 @@ Blocking checks (exit 1):
    key occurs, in any form from 6.3 step 1, in a text file or anywhere in the
    bytes of a binary file (8). No secret file from `files/` is in the
    repository, under any path:
-   - a file that contains the whole content of a secret file anywhere, as
+   - a file that contains the whole content of a (non-empty) secret file anywhere, as
      a substring of its raw or unpacked bytes, is a finding. Equality alone
      would miss a secret file with only short lines (`abc123\nxyz789`)
      that was embedded in another file or had a byte appended;
