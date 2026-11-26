@@ -278,3 +278,18 @@ func TestSecFilesTextOnly(t *testing.T) {
 		t.Error("config accepted a CRLF line")
 	}
 }
+
+// The statistical scan skips the structured .sec/ files, not node files.
+func TestDefaultExcludesSec(t *testing.T) {
+	a := loadAllow("", true)
+	for _, p := range []string{".sec/config", ".sec/names", ".sec/manifest", ".sec/allow", ".sec/hooks/pre-commit"} {
+		if !a.skipPath(p) {
+			t.Errorf("%s is scanned", p)
+		}
+	}
+	for _, p := range []string{"nodes/n1/etc/nginx/nginx.conf", ".sec/leak.pem"} {
+		if a.skipPath(p) {
+			t.Errorf("%s is skipped", p)
+		}
+	}
+}

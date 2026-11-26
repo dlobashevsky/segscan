@@ -121,7 +121,10 @@ func hunkRange(b []byte) (start, n int) {
 var defaultExcludes = []string{
 	"go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
 	"composer.lock", "poetry.lock", "Gemfile.lock", "*.lock", "*.min.js", "*.min.css", "*.map",
-	".segscan-allow", ".sec/allow",
+	".segscan-allow",
+	// .sec/ files are structured and validated by check; their paths, uuids
+	// and globs only make noise in the statistical scan.
+	".sec/allow", ".sec/config", ".sec/names", ".sec/manifest", ".sec/hooks/*",
 }
 
 type allowList struct {
