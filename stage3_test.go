@@ -163,6 +163,11 @@ func placeholderOf(r *repo, name string) string {
 
 func TestCLIKeystoreModes(t *testing.T) {
 	r, ks := newKSRepo(t)
+	// init made an empty keystore; without one, check skips check 6.
+	if st, err := os.Stat(ks); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+		t.Fatalf("init did not create the keystore: %v %v", st, err)
+	}
+	os.RemoveAll(ks)
 	r.must("segscan", "key", "add", "a", "-base58")
 	if _, errs, code := r.run("segscan", "key", "check"); code != 2 || !strings.Contains(errs, "no keystore at "+ks) {
 		t.Errorf("key check without keystore: exit %d %s", code, errs)
@@ -672,5 +677,30 @@ func TestBigSecretFile(t *testing.T) {
 	found, _ := m.knownFindings("x.bin", append([]byte("prefix\x00"), big...))
 	if len(found) == 0 {
 		t.Error("the secret file itself is not found")
+	}
+}
+
+func TestCLIKeystoreNotADirectory(t *testing.T) {
+	r, ks := newKSRepo(t)
+	os.RemoveAll(ks)
+	os.WriteFile(ks, nil, 0o664) // what a hand-made "keystore" looks like
+	_, errs, code := r.run("segscan", "check")
+	if code != 2 || !strings.Contains(errs, ks+" is an empty regular file, not a directory") || !strings.Contains(errs, "segscan init") {
+		t.Errorf("empty file as keystore: exit %d %s", code, errs)
+	}
+	if _, errs, code := r.run("segscan", "init"); code != 2 || !strings.Contains(errs, "not a directory") {
+		t.Errorf("init over a file: exit %d %s", code, errs)
+	}
+	os.Remove(ks)
+	_, errs, _ = r.run("segscan", "init")
+	if !strings.Contains(errs, "keystore "+ks+": created, empty") {
+		t.Errorf("init: %s", errs)
+	}
+	_, errs, _ = r.run("segscan", "init")
+	if !strings.Contains(errs, "keystore "+ks+": 0 key(s)") {
+		t.Errorf("init again: %s", errs)
+	}
+	if _, errs, code := r.run("segscan", "check"); code != 0 || strings.Contains(errs, "not checked") {
+		t.Errorf("check with an empty keystore: exit %d %s", code, errs)
 	}
 }

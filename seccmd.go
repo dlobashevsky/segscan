@@ -58,6 +58,7 @@ done
 
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	noKS := fs.Bool("no-keystore", false, "do not create the keystore (a machine that only plans changes)")
 	fs.Parse(args)
 	top, err := gitOut("rev-parse", "--show-toplevel")
 	if err != nil || top == "" {
@@ -116,6 +117,18 @@ func cmdInit(args []string) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "segscan: core.hooksPath = %s\n", hooks)
+	if *noKS {
+		return
+	}
+	cfg, err := loadSecConfig(top)
+	if err != nil {
+		die(err)
+	}
+	msg, err := initKeystore(top, cfg)
+	if err != nil {
+		die(err)
+	}
+	fmt.Fprintln(os.Stderr, "segscan: "+msg)
 }
 
 // ---------- key ----------

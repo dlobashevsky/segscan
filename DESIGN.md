@@ -462,6 +462,9 @@ they tried.
 
 Creates `.sec/` with `config`, an empty `names`, `manifest`, `allow`,
 `.gitignore` and `hooks/`, and runs `git config core.hooksPath .sec/hooks`.
+It also creates an empty keystore (3.2) if there is none, unless
+`-no-keystore` is given: which values leaked into a repository taken over
+is often found out only later, and check 6 should run from the start.
 Run it again in every new clone (it only sets the hooks path when `.sec/`
 exists). The existing `install` command is unchanged and writes
 `.git/hooks/pre-commit` as before.

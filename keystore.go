@@ -50,6 +50,14 @@ func openKeystore(cfg *secConfig, top string, exclusive, create bool) (*keystore
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errNoKeystore
 		}
+		var nd *notDirError
+		if errors.As(err, &nd) {
+			hint := "the keystore is a directory: remove what is there and run segscan init, which creates an empty one"
+			if strings.Contains(nd.what, "symlink") {
+				hint = "give the real directory in $SEGSCAN_KEYSTORE (or keystore in .sec/config), with no symlink on the way"
+			}
+			return nil, fmt.Errorf("keystore: %v; %s", err, hint)
+		}
 		return nil, err
 	}
 	ks := &keystore{path: p, fd: fd, keys: map[string]ksKey{}}
@@ -85,6 +93,27 @@ func openKeystore(cfg *secConfig, top string, exclusive, create bool) (*keystore
 }
 
 func (ks *keystore) close() { syscall.Close(ks.fd) }
+
+// initKeystore makes sure the keystore of the repository exists: an empty
+// one is created (mode 0700), so check 6 runs from the first commit on and
+// values can be added whenever they are found.
+func initKeystore(top string, cfg *secConfig) (string, error) {
+	missing := false
+	if ks, err := openKeystore(cfg, top, false, false); err == errNoKeystore {
+		missing = true
+	} else if err == nil {
+		ks.close() // its shared lock would block the exclusive one below
+	}
+	ks, err := openKeystore(cfg, top, true, true)
+	if err != nil {
+		return "", err
+	}
+	defer ks.close()
+	if missing {
+		return "keystore " + ks.path + ": created, empty", nil
+	}
+	return fmt.Sprintf("keystore %s: %d key(s), %d secret file(s)", ks.path, len(ks.keys), len(ks.files)), nil
+}
 
 // checkOwned checks the directory (0700, the invoker's) or a file (0600, the
 // invoker's or root's, one link) behind fd.

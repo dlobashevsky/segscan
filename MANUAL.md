@@ -53,10 +53,17 @@ per run that check 6 was skipped:
     git init cluster && cd cluster
     segscan init
 
-`init` creates `.sec/` and sets `git config core.hooksPath .sec/hooks`. Run
-`segscan init` again in every fresh clone: it creates nothing that exists
-already, it only sets the hooks path again (git does not clone that
-setting).
+`init` creates `.sec/`, sets `git config core.hooksPath .sec/hooks`, and
+creates an empty keystore (`~/.secshell/<project>`, mode 0700) unless one
+is there: check 6 then runs from the first commit, and values are added
+with `key add` and `key set` whenever they are found. `-no-keystore` skips
+that on a machine that only plans changes. Run `segscan init` again in
+every fresh clone: it creates nothing that exists already, it only sets
+the hooks path again (git does not clone that setting).
+
+Do not make the keystore by hand (`touch ~/.secshell/<project>`): it is a
+directory, and anything else in its place stops every `check`, so every
+commit, with a message saying what is there.
 
 Put the configuration of each node under `nodes/<node>/` at its host path:
 
