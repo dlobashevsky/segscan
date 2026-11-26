@@ -86,6 +86,7 @@ input (see 6.6).
   files.meta               name, scope of each file in files/ (4.3); mode 0600
   retired-files/           replaced or retired secret files, each with a .scope; mode 0700
   pending                  journal of a rotation in progress (4.3); mode 0600, absent normally
+  lock                     flock target that serializes changes (4.3); mode 0600
 ```
 
 The directory and every file in it must be mode 0600 or 0700 and owned by
@@ -100,8 +101,8 @@ root, so no keystore file is ever opened by path, for reading or writing:
   last component, and `fstat` on the descriptor must show a directory of
   mode 0700 owned by the invoking user. Root is not accepted for the
   directory itself, so `~/.secshell/<project> -> /root` is refused;
-- every file in it (`keys`, `retired`, `pending`, `files.meta`, `check.state`,
-  `check.key`) and `files/` and `retired-files/` are opened from that
+- every file in it (`keys`, `retired`, `pending`, `lock`, `files.meta`,
+  `check.state`, `check.key`) and `files/` and `retired-files/` are opened from that
   descriptor with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`
   (otherwise `openat(O_NOFOLLOW)`), and checked with `fstat` on the opened
   descriptor: a regular file (or directory), owner and mode as above, and
@@ -213,7 +214,13 @@ The order makes this survive a crash or power loss at any point:
    `fsync`ed and renamed over `keys`;
 4. `pending` is removed; the directory is `fsync`ed after each step.
 
-Every command that opens the keystore first finishes a `pending` it finds:
+Every command that changes the keystore holds an exclusive `flock` on the
+keystore file `lock` (opened like the others) for its whole run, recovery
+included; commands that only read it (`check`, `expand`, `key check`) hold
+a shared one. A second `key set` therefore waits for the first instead of
+finishing its live journal, and a `pending` seen under the exclusive lock
+can only be left over from a process that died. Under that lock, a command
+first finishes a `pending` it finds:
 it appends the record unless `retired` already holds that rotation id, then
 writes `keys` from the journal, then removes `pending`. The rotation id,
 not the value, is what tells a retry from a new retirement, so a value that
@@ -240,8 +247,13 @@ for instance when a new commit uses a transform chain no earlier commit
 did, and the commits that run covered were never searched for the new
 form. `key forget` compares the digest the run recorded with the current
 one, and on any difference searches the whole history for the value.
-The "since the value was retired" condition is taken from the latest
-retirement record of the value (the latest time among its rotation ids).
+The "since the value was retired" condition is decided by rotation id, not
+by comparing digests or clocks: a clean run records in `check.state` the
+rotation ids of every retired record it searched (6.5), and `key forget`
+requires that the qualifying run covered every rotation id the value has in
+`retired`. A value that was retired again after that run (A, B, A) has a
+new id the run never saw, so the old run does not count, however equal its
+forms and scope look.
 
 Secret files are kept the same way. When `import -secret <name>` replaces
 `files/<name>`, the old content moves to
@@ -257,8 +269,9 @@ file, and `key forget -secret <name>` drops it under the same condition.
 `<name> TAB <scope>` line, written by `import -secret` and widened by
 `key set -meta <name>` like the scope of a key: the union of every scope
 the manifest gave the file while it had this content, started afresh when
-`import -secret` replaces the content. `key check` reports a line
-that differs from the scope the manifest gives now. A secret file that no
+`import -secret` replaces the content. `key check` reports a line whose
+scope does not cover the scope the manifest gives now; a wider one is the
+normal state after a move and is not reported. A secret file that no
 type `s` entry names any more is retired with `key retire -secret <name>`
 (6.2): the current file moves to `retired-files/` with the union of the
 scope in `files.meta`, the scope in the last commit whose manifest still
@@ -488,7 +501,14 @@ The steps:
    longest first. Inside the key's scope, if it has one, each occurrence is
    replaced with the placeholder for that form. An occurrence outside the
    scope is an error: `import` stops, writes no file, and lists the places,
-   because leaving it would put the value into the tree in clear.
+   because leaving it would put the value into the tree in clear. A weak
+   form (6.5 check 6) follows the same token-and-scope rule as in check 6:
+   it counts only as a whole token and only inside the key's scope.
+   Outside the scope it is not an occurrence at all, since `0` in `0600` or
+   `listen 0` says nothing about the key, so an unrelated file is imported
+   as it is. A key with a weak form and no scope is refused by `import` as
+   by `key check`. The strong forms of the same value (`sha256("0")`) are
+   still errors anywhere outside the scope.
 2. If two keys produce the same form, that is an error naming both keys,
    because the placeholder cannot be chosen.
 3. Forms of one key can be equal too: an alphanumeric value is unchanged by
@@ -683,7 +703,10 @@ given in brackets:
    (4.4), or, for an entry without one, the directory of the entry and
    everything below it (`nodes/n1/etc/app/**` for `nodes/n1/etc/app/app.env`),
    where a copy of the value is most likely to land. Several entries naming
-   the same secret file give the union. A retired version keeps the scope
+   the same secret file give the union, and so does the scope in
+   `files.meta` (4.3): a file whose entry moved from one directory to
+   another keeps being searched in the old one too, where an earlier commit
+   may have it. A retired version keeps the scope
    the file had when it was retired, stored next to it in
    `retired-files/<name>.<timestamp>.<n>.scope` (4.3). A file in `files/`
    that no type `s` entry names keeps the scope in `files.meta`, so its weak
@@ -716,7 +739,10 @@ made elsewhere skipped check 6.
 `--all` keeps its state in the keystore directory (`check.state`, mode 0600),
 because only the deploy machine runs check 6. The state holds:
 
-- the ref tips already checked;
+- the ref tips already checked, and the time the run completed;
+- the rotation ids of every retired record and every retired secret-file
+  version it searched (4.3), so `key forget` can tell whether a run came
+  after a retirement;
 - for every key, a digest of its name, its uuid and the complete sorted set
   of forms that check 6 searches for it (6.3 step 1), for the current value
   and every retired one, together with its scope and which of its forms are
@@ -728,8 +754,8 @@ because only the deploy machine runs check 6. The state holds:
   For every secret file, a digest of its name and of every form searched
   for it, again for the current version in `files/` and every retired one
   in `retired-files/`, together with its scope (the `scope=` attributes and
-  entry directories of its type `s` entries, 6.5 check 6) and which of its
-  forms are weak. A new type `s` entry naming an existing secret file
+  entry directories of its type `s` entries and the scope in `files.meta`,
+  6.5 check 6) and which of its forms are weak. A new type `s` entry naming an existing secret file
   therefore changes the digest, and the file is checked against the whole
   history in the paths it now covers. A version that was current and retired again
   between two clean runs (A, then B, then C) is still part of the set, so
