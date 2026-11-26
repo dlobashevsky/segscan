@@ -216,6 +216,8 @@ func TestManifest(t *testing.T) {
 		"a\ts\t0600\troot\troot",
 		"a\tf\t0644\troot\troot\tnoequals",
 		"a\tf\t0644\troot\troot\tsecret=k",
+		"a\tf\t0644\troot\troot\tselinuxx=x",
+		"a\tf\t0644\troot\troot\txattr.=x",
 		"a\td\t0755\troot\troot\tsecret=k",
 		"a\tf\t0644",
 	} {

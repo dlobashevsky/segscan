@@ -626,3 +626,27 @@ func TestCLIKeystoreInsideRepository(t *testing.T) {
 		t.Errorf("keystore inside the repository: exit %d\n%s", code, out)
 	}
 }
+
+// Files hidden by a sparse checkout are still part of the tree: manifest fix
+// keeps their entries, and key rm still sees their placeholders.
+func TestCLISparseCheckout(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	ph := strings.TrimSpace(r.must("segscan", "key", "add", "db_pass"))
+	r.write("nodes/n1/etc/a.conf", "x\n")
+	r.write("nodes/n2/etc/b.conf", "p = "+ph+"\n")
+	r.must("segscan", "manifest", "fix")
+	r.must("git", "add", "-A")
+	r.must("git", "commit", "-q", "--no-verify", "-m", "one")
+	r.must("git", "sparse-checkout", "set", "--no-cone", "/*", "!/nodes/n2/")
+	if _, err := os.Stat(filepath.Join(r.dir, "nodes/n2/etc/b.conf")); err == nil {
+		t.Skip("sparse checkout did not hide the file")
+	}
+	r.must("segscan", "manifest", "fix")
+	if !strings.Contains(r.read(".sec/manifest"), "nodes/n2/etc/b.conf\t") {
+		t.Errorf("manifest fix dropped the entry of a sparse file:\n%s", r.read(".sec/manifest"))
+	}
+	if _, errs, code := r.run("segscan", "key", "rm", "db_pass"); code == 0 {
+		t.Errorf("key rm removed a key still used in a sparse file\n%s", errs)
+	}
+}

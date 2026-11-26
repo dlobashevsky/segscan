@@ -78,6 +78,10 @@ func worktreeFiles(top string) ([]snapFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	sparse, err := skipWorktree(top)
+	if err != nil {
+		return nil, err
+	}
 	var out []snapFile
 	seen := map[string]bool{}
 	for _, p := range recs {
@@ -89,6 +93,11 @@ func worktreeFiles(top string) ([]snapFile, error) {
 		st, err := os.Lstat(filepath.Join(top, p))
 		switch {
 		case err != nil:
+			// Hidden by a sparse checkout: still part of the tree, read from
+			// the index, or manifest fix and key rm would take it as deleted.
+			if f, ok := sparse[p]; ok {
+				out = append(out, f)
+			}
 		case st.IsDir(): // git lists a directory only for a submodule or a nested repository
 			out = append(out, snapFile{Path: p, Gitlink: true})
 		case st.Mode().IsRegular() || st.Mode()&os.ModeSymlink != 0:
@@ -98,12 +107,37 @@ func worktreeFiles(top string) ([]snapFile, error) {
 	return out, nil
 }
 
+// skipWorktree returns the index entries marked skip-worktree (sparse
+// checkout), by path.
+func skipWorktree(top string) (map[string]snapFile, error) {
+	recs, err := gitZ(top, "ls-files", "-t", "-s", "-z")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]snapFile{}
+	for _, r := range recs {
+		// <tag> <mode> <oid> <stage>\t<path>
+		meta, p, ok := strings.Cut(r, "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 4 || f[0] != "S" {
+			continue
+		}
+		out[p] = snapFile{Path: p, Link: f[1] == "120000", Gitlink: f[1] == "160000", OID: f[2]}
+	}
+	return out, nil
+}
+
 func worktreeSnapshot(top string) (*snapshot, error) {
 	files, err := worktreeFiles(top)
 	if err != nil {
 		return nil, err
 	}
-	s := &snapshot{Files: files, read: func(f snapFile) ([]byte, error) { return os.ReadFile(filepath.Join(top, f.Path)) }}
+	s := &snapshot{Files: files, read: func(f snapFile) ([]byte, error) {
+		if f.OID != "" { // a sparse-checkout entry, not on disk
+			return exec.Command("git", "-C", top, "cat-file", "blob", f.OID).Output()
+		}
+		return os.ReadFile(filepath.Join(top, f.Path))
+	}}
 	s.index()
 	return s, nil
 }

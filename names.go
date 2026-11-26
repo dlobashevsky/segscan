@@ -166,10 +166,13 @@ func parseManifest(data []byte) ([]*mEntry, []lineProblem) {
 		for _, a := range e.Attrs {
 			k, v, has := strings.Cut(a, "=")
 			check(has && k != "", "%s: bad attribute %q", e.Path, a)
-			switch k {
-			case "secret":
+			switch {
+			case k == "secret":
 				check(e.Type == "s", "%s: secret= is only for type s", e.Path)
 				secret = v
+			case k == "acl", k == "selinux", strings.HasPrefix(k, "xattr.") && len(k) > len("xattr."):
+			default:
+				check(false, "%s: unknown attribute %q", e.Path, k)
 			}
 		}
 		if e.Type == "s" {
