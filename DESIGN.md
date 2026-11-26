@@ -750,7 +750,11 @@ Blocking checks (exit 1):
      covers binary secret files such as a PKCS#12 bundle;
    - so is a file that contains a line of one (trimmed of spaces);
    - so is a file that contains the value part of a `name=value` line of
-     one, so `TOKEN=Zx81...` is found under another name.
+     one, so `TOKEN=Zx81...` is found under another name. The value is
+     taken both as written and as the shell and dotenv conventions read it:
+     surrounding `"..."` or `'...'` removed, and inside double quotes the
+     escapes `\"`, `\\`, `\$` and `\n` undone, so `TOKEN="Zx81..."` is
+     also found as the bare `Zx81...` copied elsewhere.
 
    Each of these patterns is searched only in its strong forms (below), so
    `}`, `[main]`, `PORT=8080` or `DEBUG=true` match nothing by themselves.
@@ -923,8 +927,14 @@ text.
   scanned as its strings:
   - runs of at least 8 printable ASCII bytes;
   - runs of at least 8 UTF-16LE characters;
-  - gzip, brotli, zip and the Flate streams of a PDF are unpacked first, up to
-    64 MiB unpacked and two levels deep;
+  - gzip, brotli, zip and the streams of a PDF are unpacked first, up to
+    64 MiB unpacked and two levels deep. In a PDF every lossless filter is
+    decoded (`FlateDecode`, `LZWDecode`, `ASCII85Decode`, `ASCIIHexDecode`,
+    `RunLengthDecode`, chained as the stream says). An encrypted PDF
+    (`/Encrypt`), or a stream with any other filter that is not an image
+    codec, is "not fully scanned" (below); image codecs (`DCTDecode`,
+    `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`) hold pixels, not text, and
+    their raw bytes are still searched as they are;
   - a file in another common compressed or archive format that segscan does
     not unpack (xz, zstd, bzip2, 7z, rar, recognized by its magic bytes) is
     a blocking `known_value` finding, "not fully scanned", in check 6, as
