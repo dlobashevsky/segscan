@@ -162,7 +162,7 @@ func (c *secConfig) keystoreDir() string {
 	}
 	if rest, ok := strings.CutPrefix(p, "~/"); ok {
 		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, rest)
+			p = home + string(filepath.Separator) + rest // no Clean: see canonical
 		}
 	}
 	return p

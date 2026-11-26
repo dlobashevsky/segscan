@@ -44,6 +44,12 @@ known=$(git ls-remote "$1" 2>/dev/null | while read -r oid ref; do
 done)
 while read -r lref loid rref roid; do
 	case "$loid" in *[!0]*) ;; *) continue ;; esac   # a deleted ref
+	# A tag on a blob or tree pushes that object, and check only reads
+	# commits: refuse rather than let it through unchecked.
+	git cat-file -e "$loid^{commit}" 2>/dev/null || {
+		echo "pre-push: $lref is not a commit; segscan cannot check it (git push --no-verify to push anyway)" >&2
+		exit 1
+	}
 	segscan check -range "$loid$known" || exit 1
 done
 `

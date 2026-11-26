@@ -317,6 +317,18 @@ func TestCLIConfigRepository(t *testing.T) {
 	if _, errs, code := r.run("git", "push", "-q", "origin", "clean"); code != 0 {
 		t.Errorf("pre-push of a clean commit on advertised history: exit %d\n%s", code, errs)
 	}
+	// A tag on a blob pushes the blob, which check cannot read as a commit:
+	// refused with a clear message, not a bad-object error, and not let through.
+	blob := strings.TrimSpace(r.must("git", "hash-object", "-w", "nodes/n1/etc/nginx/x.conf"))
+	r.must("git", "tag", "blobtag", blob)
+	if _, errs, code := r.run("git", "push", "-q", "origin", "refs/tags/blobtag"); code == 0 || !strings.Contains(errs, "is not a commit") {
+		t.Errorf("pre-push of a tag on a blob: exit %d\n%s", code, errs)
+	}
+	// An annotated tag on a commit is checked like the commit.
+	r.must("git", "tag", "-a", "-m", "v", "v1", "clean")
+	if _, errs, code := r.run("git", "push", "-q", "origin", "refs/tags/v1"); code != 0 {
+		t.Errorf("pre-push of an annotated tag on a clean commit: exit %d\n%s", code, errs)
+	}
 	r.must("git", "checkout", "-q", "main")
 
 	// key list and key rm.
@@ -410,7 +422,10 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 	r.must("git", "rm", "-q", "--cached", "vault/keys")
 	// The same for an absolute keystore path below the repository, written
 	// directly and through the alias.
-	for _, ks := range []string{filepath.Join(r.dir, "vault"), filepath.Join(alias, "vault")} {
+	// The last one goes through the alias and then "..": resolved first, it
+	// is the repository again; collapsed lexically first, it is not.
+	for _, ks := range []string{filepath.Join(r.dir, "vault"), filepath.Join(alias, "vault"),
+		alias + "/../" + filepath.Base(r.dir) + "/vault"} {
 		r.write(".sec/config", "keystore = "+ks+"\n")
 		r.write("vault/keys", "x\n")
 		r.must("git", "add", "-A")

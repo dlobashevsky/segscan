@@ -385,7 +385,9 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	var rels []string
 	if !filepath.IsAbs(ks) {
 		rels = append(rels, filepath.Clean(ks))
-		ks = filepath.Join(ck.top, ks)
+		// Not filepath.Join: that would collapse ".." before symlinks
+		// are resolved.
+		ks = ck.top + string(filepath.Separator) + ks
 	}
 	if rel, ok := relBelowTop(canonical(ck.top), ks); ok {
 		rels = append(rels, rel)
@@ -492,40 +494,54 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 	return out
 }
 
-// canonical resolves symlinks in p. For a path that does not exist (yet),
-// the longest existing prefix is resolved and the rest appended.
+// The two functions below walk a path one component at a time and resolve
+// symlinks before applying "..": /tmp/alias/../repo with alias -> /actual/x
+// is /actual/repo, not /tmp/repo. filepath.Clean must therefore never see
+// the raw path first.
+
+// canonical resolves symlinks in the absolute path p. Components that do
+// not exist (yet) are kept as written.
+func canonical(p string) string {
+	cur := string(filepath.Separator)
+	for _, c := range strings.Split(p, string(filepath.Separator)) {
+		cur = step(cur, c)
+	}
+	return cur
+}
+
+// step moves from the resolved directory cur by one raw component.
+func step(cur, c string) string {
+	switch c {
+	case "", ".":
+		return cur
+	case "..":
+		return filepath.Dir(cur)
+	}
+	next := filepath.Join(cur, c)
+	if r, err := filepath.EvalSymlinks(next); err == nil {
+		return r
+	}
+	return next
+}
+
 // relBelowTop finds the shortest prefix of the absolute path p that is the
 // repository top (top is canonical) and returns the rest of p as written,
 // without resolving it.
 func relBelowTop(top, p string) (string, bool) {
-	p = filepath.Clean(p)
-	parts := strings.Split(strings.TrimPrefix(p, string(filepath.Separator)), string(filepath.Separator))
-	prefix := string(filepath.Separator)
+	parts := strings.Split(p, string(filepath.Separator))
+	cur := string(filepath.Separator)
 	for i := 0; i <= len(parts); i++ {
-		if prefix == top || canonical(prefix) == top {
-			return filepath.Join(append([]string{"."}, parts[i:]...)...), true
+		if cur == top {
+			rel := filepath.Clean(filepath.Join(append([]string{"."}, parts[i:]...)...))
+			if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return rel, true
+			}
 		}
 		if i < len(parts) {
-			prefix = filepath.Join(prefix, parts[i])
+			cur = step(cur, parts[i])
 		}
 	}
 	return "", false
-}
-
-func canonical(p string) string {
-	p = filepath.Clean(p)
-	rest := ""
-	for {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return filepath.Join(r, rest)
-		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return filepath.Join(p, rest)
-		}
-		rest = filepath.Join(filepath.Base(p), rest)
-		p = parent
-	}
 }
 
 // ---------- the command ----------
