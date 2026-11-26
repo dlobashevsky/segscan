@@ -113,9 +113,8 @@ root, so no keystore file is ever opened by path, for reading or writing:
   gets the other checks only). Only then is it read, or written;
 - a file that is replaced is written to a new temporary name created with
   `O_EXCL` in the same directory descriptor and moved with `renameat`,
-  which replaces the directory entry and never writes through it. The one
-  file written in place is `retired` (`O_APPEND`), and only after the
-  checks above on the descriptor that is written.
+  which replaces the directory entry and never writes through it. No
+  keystore file is ever written in place, `retired` included (4.3).
 
 The keystore is not kept under `.gitignore` inside the tree: `git add -f`,
 `git clean -fdx`, a `tar` or `rsync` of the tree, and IDE indexing all go
@@ -236,12 +235,16 @@ retired, before the value:
 The rotation id is 128 random bits in hex, new for every retirement. The
 same value can be retired more than once (A, then B, then A again, then C);
 each retirement is its own record, with its own time.
-`key set` does not drop the value it replaces: it appends it to `retired`.
+`key set` does not drop the value it replaces: it adds it to `retired`.
 The order makes this survive a crash or power loss at any point:
 1. a journal, `pending` (mode 0600), is written with `O_EXCL` and `fsync`ed:
    the new rotation id, the old record and the new `keys` line;
-2. the old record, with that rotation id, is appended to `retired`
-   (`O_APPEND`), and `retired` is `fsync`ed;
+2. `retired` with the old record (and its rotation id) added is written
+   to a temporary file in the same directory, `fsync`ed and renamed over
+   `retired`. It is never appended in place: an append cut off by a crash
+   could leave a torn last record, which would make the file unreadable or
+   look like a finished retirement. A rename leaves either the old file or
+   the new one;
 3. the new `keys` is written to a temporary file in the same directory,
    `fsync`ed and renamed over `keys`;
 4. `pending` is removed; the directory is `fsync`ed after each step.
@@ -259,7 +262,8 @@ interleave with the other on the same files. A second `key set` therefore waits 
 finishing its live journal, and a `pending` seen under the exclusive lock
 can only be left over from a process that died. Under that lock, a command
 first finishes a `pending` it finds:
-it appends the record unless `retired` already holds that rotation id, then
+it adds the record (by the same rename) unless `retired` already holds
+that rotation id, then
 writes `keys` from the journal, then removes `pending`. The rotation id,
 not the value, is what tells a retry from a new retirement, so a value that
 comes back (A, B, A) is recorded again with its later time. While
@@ -542,7 +546,12 @@ The steps:
    commits a range excludes (its base), and the chains recorded in
    `check.state`. The state keeps every chain it has seen, so a chain
    removed in the very commit being checked (the staged change, or the
-   first commit of a range) is still searched. Chains of three or four
+   first commit of a range) is still searched. On a machine with the
+   keystore but without `check.state` yet (a new deploy machine, a lost
+   state), the chain set is first seeded from every commit reachable from
+   any ref, as `--all` would collect it, and stored; a chain used only deep
+   in history is then searched by the first `--staged` or pre-push check
+   too. Chains of three or four
    are allowed by the grammar for configurations of our own tools, but
    ordinary configurations need at most two (a sha256 passed through a
    URL), so three and four are searched only when the repository uses
@@ -769,10 +778,13 @@ Blocking checks (exit 1):
      one, so `TOKEN=Zx81...` is found under another name. The value is
      taken both as written and as the shell and dotenv conventions read it:
      an inline comment outside quotes (` # ...`) cut off first, then
-     surrounding `"..."` or `'...'` removed, inside double quotes the
-     escapes `\"`, `\\`, `\$` and `\n` undone, and outside quotes a
-     backslash taken as escaping the next character (`TOKEN=Zx81\ value`
-     gives `Zx81 value`), so `TOKEN="Zx81..." # prod`
+     surrounding `"..."` or `'...'` removed, and the escapes undone. The
+     two conventions differ, so both readings are searched: the POSIX
+     shell one (inside double quotes only `\"`, `\\`, `\$`, `` \` `` and
+     backslash-newline are escapes, so `\n` stays two characters; outside
+     quotes a backslash escapes the next character, `TOKEN=Zx81\ value`
+     gives `Zx81 value`) and the dotenv one (inside double quotes `\n` is
+     also a newline), so `TOKEN="Zx81..." # prod`
      is also found as the bare `Zx81...` copied elsewhere.
 
    An empty pattern (an empty or blank line, `OPTIONAL=`, `X=""`) is dropped
