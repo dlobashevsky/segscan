@@ -798,7 +798,8 @@ manifest apply -node <node> [path...]   set live attributes from the manifest, c
 manifest apply -links -node <node>      replace declared type l links whose target has drifted
                                         with the target in the repository, printing old and new;
                                         a link only, never what it points to   (sudo)
-manifest fix                            add entries for new files, drop entries of deleted ones
+manifest fix                            add entries for new files, drop f and l entries of
+                                        deleted ones
 ```
 
 `manifest fix` gives a new file the owner and group of the nearest parent
@@ -806,8 +807,11 @@ directory entry (type `d`) of the same node, and that directory's mode
 without execute, setuid, setgid and sticky bits (`0750` -> `0640`). A
 symlink gets `0777`. With no parent entry it uses `root:root 0600`. Every
 added entry is printed for review. Paths that match `forbid` are not added.
-A type `d` entry stays while its directory exists, and type `s` entries are
-never dropped.
+Only type `f` and `l` entries, which need a file in the tree, are dropped
+when their file is gone. Type `d` and `s` entries describe the target and
+have no file of their own (git keeps no empty directory, and a secret file
+is never in the tree), so `manifest fix` never drops them; they are removed
+by hand.
 
 ## 7. Flows
 
