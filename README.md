@@ -119,8 +119,9 @@ To add your own words (transliteration, internal abbreviations):
 
 A repository with a `.sec/` directory keeps its credentials out of git:
 files hold placeholders such as `!SECKEY_ch_sts_<uuid>!`, and the values live
-in a keystore outside the repository. The full design is in
-[DESIGN.md](DESIGN.md). What works now (no keystore needed):
+in a keystore outside the repository. How to use it today is in
+[MANUAL.md](MANUAL.md); the full design is in [DESIGN.md](DESIGN.md). What
+works now (no keystore needed):
 
     segscan init                       # .sec/, and core.hooksPath -> .sec/hooks
     segscan key add ch_sts -scope 'nodes/*/etc/nginx/**'
