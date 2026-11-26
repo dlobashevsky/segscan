@@ -242,6 +242,14 @@ func TestPrivateKeyAfterUnterminatedBlock(t *testing.T) {
 	}
 }
 
+func TestPrivateKeyInBinary(t *testing.T) {
+	data := "\x00\x01bin\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n-----END OPENSSH PRIVATE KEY-----\n"
+	fi := analyzeFile([]byte(data))
+	if len(fi.finds) != 1 || fi.finds[0].Check != ckPrivate || fi.finds[0].Line != 2 {
+		t.Errorf("finds: %+v", fi.finds)
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	a, b := newUUID(), newUUID()
 	if !isUUID([]byte(a), false) || a == b || a[14] != '4' || !strings.ContainsRune("89ab", rune(a[19])) {

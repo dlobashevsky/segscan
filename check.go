@@ -246,11 +246,11 @@ func isBinary(data []byte) bool {
 // by blob id across snapshots with different allowlists.
 func analyzeFile(data []byte) *fileInfo {
 	fi := &fileInfo{}
-	if isBinary(data) {
+	binary := isBinary(data)
+	if binary {
 		if i := bytes.Index(data, phPrefix); i >= 0 {
 			fi.finds = append(fi.finds, checkFinding{Col: i + 1, Check: ckGrammar, Msg: "placeholder in a binary file"})
 		}
-		return fi
 	}
 	var pem pemState
 	no := 0
@@ -267,7 +267,9 @@ func analyzeFile(data []byte) *fileInfo {
 			f := Finding{Text: string(line)}
 			fi.finds = append(fi.finds, checkFinding{Line: no, Col: 1, Check: ckPrivate, Msg: pemLabel(line), fp: f.FP()})
 		}
-		if !bytes.Contains(line, phPrefix) {
+		// A binary file still gets the private key check, line by line;
+		// only placeholders are not looked for in it.
+		if binary || !bytes.Contains(line, phPrefix) {
 			continue
 		}
 		good, bad := parsePlaceholders(line)

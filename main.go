@@ -485,21 +485,38 @@ func cmdDiff(args []string, r io.Reader, _ bool) {
 // fromIndex makes the hook follow the staged .sec/ files, not the working
 // tree: an unstaged edit of .sec/config (hook_scan = off), .sec/allow or the
 // model must not weaken the check of what is being committed. Flags given on
-// the command line still win. It returns the staged model's bytes (nil: none
-// is staged) and whether the hook must use them instead of any file on disk.
-func (c *common) fromIndex() ([]byte, bool) {
-	for _, p := range []string{"config", "allow", "segscan.model"} {
-		out, _ := exec.Command("git", "-C", c.top, "ls-files", "-s", "-z", "--", secDir+"/"+p).Output()
-		for _, rec := range strings.Split(string(out), "\x00") {
-			meta, path, ok := strings.Cut(rec, "\t")
-			if !ok {
-				continue
-			}
-			// A path below it means a directory in its place.
-			if f := strings.Fields(meta); path != secDir+"/"+p || len(f) == 0 || f[0] != "100644" && f[0] != "100755" {
-				die(fmt.Errorf("staged %s/%s is not a regular file", secDir, p))
-			}
+// the command line still win. It reports whether the model must come from
+// the index (stagedModel) instead of any file on disk.
+// stagedRegular exits unless .sec/<p> in the index is absent or one regular
+// file (a path below it means a directory in its place).
+func (c *common) stagedRegular(p string) {
+	out, _ := exec.Command("git", "-C", c.top, "ls-files", "-s", "-z", "--", secDir+"/"+p).Output()
+	for _, rec := range strings.Split(string(out), "\x00") {
+		meta, path, ok := strings.Cut(rec, "\t")
+		if !ok {
+			continue
 		}
+		if f := strings.Fields(meta); path != secDir+"/"+p || len(f) == 0 || f[0] != "100644" && f[0] != "100755" {
+			die(fmt.Errorf("staged %s/%s is not a regular file", secDir, p))
+		}
+	}
+}
+
+// stagedModel returns the staged model's bytes, nil if none is staged. It is
+// called only when the scan runs: with hook_scan = off the model is not
+// looked at, whatever is staged in its place.
+func (c *common) stagedModel() []byte {
+	c.stagedRegular("segscan.model")
+	out, err := exec.Command("git", "-C", c.top, "show", ":"+secDir+"/segscan.model").Output()
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+func (c *common) fromIndex() bool {
+	for _, p := range []string{"config", "allow"} {
+		c.stagedRegular(p)
 	}
 	show := func(p string) ([]byte, bool) {
 		out, err := exec.Command("git", "-C", c.top, "show", ":"+secDir+"/"+p).Output()
@@ -521,14 +538,9 @@ func (c *common) fromIndex() ([]byte, bool) {
 		}
 		c.allowList = a
 	}
-	if c.set["m"] || os.Getenv("SEGSCAN_MODEL") != "" {
-		return nil, false
-	}
-	if data, ok := show("segscan.model"); ok {
-		return data, true // decoded only if the scan runs (hook_scan may be off)
-	}
-	// No staged model: the built-in one only, never the working-tree file.
-	return nil, true
+	// true: the model is the staged one (or the built-in one if none is
+	// staged), never the working-tree file.
+	return !c.set["m"] && os.Getenv("SEGSCAN_MODEL") == ""
 }
 
 func cmdHook(args []string) {
@@ -537,10 +549,9 @@ func cmdHook(args []string) {
 	fs.Parse(args)
 	c.fromStaged = true
 	c.finish(fs)
-	var staged []byte
 	indexOnly := false
 	if c.sec != nil {
-		staged, indexOnly = c.fromIndex()
+		indexOnly = c.fromIndex()
 	}
 	block := !*warn
 	if !c.set["warn"] && c.sec != nil {
@@ -554,6 +565,10 @@ func cmdHook(args []string) {
 	path := modelPath(c.model)
 	var m *Model
 	var err error
+	var staged []byte
+	if indexOnly {
+		staged = c.stagedModel()
+	}
 	if indexOnly && staged != nil {
 		if m, err = decodeModel(bytes.NewReader(staged), "staged "+secDir+"/segscan.model"); err != nil {
 			die(err)

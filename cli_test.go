@@ -434,6 +434,24 @@ func TestCLISecFilesAndKeystore(t *testing.T) {
 		t.Errorf("a broken staged model with the scan on: exit %d\n%s", code, errs)
 	}
 	r.must("git", "rm", "-q", "--cached", ".sec/segscan.model")
+	// Nor is it checked for being a regular file: a symlink staged in its
+	// place is fine with the scan off, an error with it on.
+	model := r.read(".sec/segscan.model")
+	r.must("rm", ".sec/segscan.model")
+	r.must("ln", "-s", "elsewhere", ".sec/segscan.model")
+	r.write(".sec/config", "hook_scan = off\n")
+	r.must("git", "add", "-f", ".sec/config", ".sec/segscan.model")
+	if _, errs, code := r.run("segscan", "hook"); code != 0 {
+		t.Errorf("hook_scan = off checked the staged model: exit %d\n%s", code, errs)
+	}
+	r.write(".sec/config", "")
+	r.must("git", "add", ".sec/config")
+	if _, errs, code := r.run("segscan", "hook"); code != 2 || !strings.Contains(errs, "not a regular file") {
+		t.Errorf("a symlinked staged model with the scan on: exit %d\n%s", code, errs)
+	}
+	r.must("git", "rm", "-q", "--cached", ".sec/segscan.model")
+	r.must("rm", ".sec/segscan.model")
+	r.write(".sec/segscan.model", model)
 	// Nor an unstaged broken config: the staged one is valid.
 	r.write(".sec/config", "colour = red\n")
 	if _, errs, code := r.run("segscan", "hook"); code != 0 {
