@@ -118,7 +118,16 @@ The keystore is not kept under `.gitignore` inside the tree: `git add -f`,
 around `.gitignore`. A symlink `.sec/keys -> ~/.secshell/<project>` is
 allowed for convenience; `.sec/.gitignore` ignores it, and `git clean`
 removes the link, not the target. `keys sync <host>` copies the keystore to
-another machine over ssh with the modes kept.
+another machine over ssh with the modes kept. It is not a file copy: it
+runs `segscan keys receive` on the destination, which takes the
+destination's own exclusive `lock` (4.3; `lock` is never copied, so a
+command holding it there keeps a valid lock) and receives the files into
+a staging directory inside the keystore. Under the lock it merges
+`retired` and `retired-files/` first, as a union by rotation id (nothing
+retired on either side is ever lost), then `files/`, and replaces `keys`
+last with an atomic rename, each step `fsync`ed and journalled like a
+rotation. An interrupted sync therefore leaves the old current value
+searchable on the destination, and the next run finishes or redoes it.
 
 ## 4. File formats
 
@@ -454,6 +463,17 @@ node root must be a plain directory, never a symlink. Before writing, the
 resolved destination is checked to be under the node root. A symlink there
 is an error, because under sudo it could point back into the live system and
 the write would replace a real configuration with placeholders.
+
+The source is read the same way. Under sudo the live path may lie below a
+directory the invoking user can write, who could swap the source file, or
+one of its ancestors, for a symlink to a root-only file while `import`
+runs. So `/<abs-path>` is opened component by component from a descriptor
+of `/`, with `O_NOFOLLOW` on every component (`openat2` with
+`RESOLVE_NO_SYMLINKS` where available): a symlink among the ancestors is
+an error, a symlink as the last component is read with `readlinkat` and
+imported as type `l`, never followed. The type and attributes are taken
+with `fstat` on the descriptor that is then read, so the bytes imported
+are those of the file that was checked.
 
 The final component may be a symlink only when the manifest declares it as
 type `l`: a configuration symlink imported earlier. It is never followed;
