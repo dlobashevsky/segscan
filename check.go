@@ -561,7 +561,9 @@ func canonical(p string) string {
 }
 
 // step moves from the resolved directory cur by one raw component.
-func step(cur, c string) string {
+func step(cur, c string) string { return stepN(cur, c, 0) }
+
+func stepN(cur, c string, depth int) string {
 	switch c {
 	case "", ".":
 		return cur
@@ -571,6 +573,22 @@ func step(cur, c string) string {
 	next := filepath.Join(cur, c)
 	if r, err := filepath.EvalSymlinks(next); err == nil {
 		return r
+	}
+	// A dangling symlink (its target does not exist, e.g. a directory that
+	// was removed from the working tree) still points somewhere: follow its
+	// target as written, one component at a time, instead of keeping the
+	// link's own name.
+	if fi, err := os.Lstat(next); err == nil && fi.Mode()&os.ModeSymlink != 0 && depth < 40 {
+		if t, err := os.Readlink(next); err == nil {
+			base := cur
+			if filepath.IsAbs(t) {
+				base = string(filepath.Separator)
+			}
+			for _, tc := range strings.Split(t, string(filepath.Separator)) {
+				base = stepN(base, tc, depth+1)
+			}
+			return base
+		}
 	}
 	return next
 }

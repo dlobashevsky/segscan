@@ -664,3 +664,21 @@ func TestCLINodeRootNotADirectory(t *testing.T) {
 		t.Errorf("gitlink at a node root: exit %d\n%s", code, out)
 	}
 }
+
+// A keystore reached through an outside symlink whose target in the
+// repository has been removed from the working tree is still inside it.
+func TestCLIKeystoreThroughDanglingLink(t *testing.T) {
+	r := newRepo(t)
+	r.must("segscan", "init")
+	ext := filepath.Join(t.TempDir(), "ext")
+	if err := os.Symlink(filepath.Join(r.dir, "missing"), ext); err != nil {
+		t.Fatal(err)
+	}
+	r.write(".sec/config", "keystore = "+ext+"/vault\n")
+	r.write("missing/vault/keys", "x\n")
+	r.must("git", "add", "-A")
+	r.must("rm", "-r", "missing")
+	if out, _, code := r.run("segscan", "check", "-staged"); code != 1 || !strings.Contains(out, "missing/vault/keys\t0\t0\tforbidden") {
+		t.Errorf("keystore through a dangling link: exit %d\n%s", code, out)
+	}
+}
