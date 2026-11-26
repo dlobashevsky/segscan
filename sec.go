@@ -138,7 +138,7 @@ func parseSecConfig(data []byte, project string) (*secConfig, error) {
 			cfg.Forbid = splitList(v)
 		case "scan_bpc":
 			f, err := strconv.ParseFloat(v, 64)
-			if err != nil || f <= 0 || f > 8 {
+			if err != nil || !(f > 0 && f <= 8) { // also refuses NaN
 				return nil, bad()
 			}
 			cfg.ScanBpc = f

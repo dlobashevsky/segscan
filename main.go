@@ -136,16 +136,24 @@ func (c *common) finish(fs *flag.FlagSet) {
 }
 
 // applySec takes the statistical settings of .sec/config for every flag
-// that was not given on the command line.
+// that was not given on the command line. A key the config leaves out
+// means the default, not whatever an earlier config set: the hook applies
+// the working tree's config first and then the staged one.
 func (c *common) applySec(cfg *secConfig) {
 	if !c.set["skip-uuids"] {
 		c.o.Skip = cfg.SkipUUIDs
 	}
-	if !c.set["bpc"] && cfg.ScanBpc > 0 {
-		c.o.MinBpc = cfg.ScanBpc
+	if !c.set["bpc"] {
+		c.o.MinBpc = defaultOpts.MinBpc
+		if cfg.ScanBpc > 0 {
+			c.o.MinBpc = cfg.ScanBpc
+		}
 	}
-	if !c.set["minlen"] && cfg.ScanMinLen > 0 {
-		c.o.MinLen = cfg.ScanMinLen
+	if !c.set["minlen"] {
+		c.o.MinLen = defaultOpts.MinLen
+		if cfg.ScanMinLen > 0 {
+			c.o.MinLen = cfg.ScanMinLen
+		}
 	}
 }
 

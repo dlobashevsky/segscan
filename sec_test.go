@@ -299,7 +299,7 @@ func TestSecConfigScanThresholds(t *testing.T) {
 	if err != nil || cfg.ScanBpc != 4.5 || cfg.ScanMinLen != 12 {
 		t.Fatalf("%+v %v", cfg, err)
 	}
-	for _, bad := range []string{"scan_bpc = 0", "scan_bpc = 9", "scan_bpc = x", "scan_minlen = 0", "scan_minlen = 1.5"} {
+	for _, bad := range []string{"scan_bpc = 0", "scan_bpc = 9", "scan_bpc = x", "scan_bpc = NaN", "scan_bpc = nan", "scan_bpc = Inf", "scan_minlen = 0", "scan_minlen = 1.5"} {
 		if _, err := parseSecConfig([]byte(bad+"\n"), "p"); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

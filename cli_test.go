@@ -712,4 +712,12 @@ func TestCLIScanThresholdsFromConfig(t *testing.T) {
 	if out, errs, code := r.run("segscan", "hook"); code != 0 {
 		t.Errorf("hook with the staged scan_bpc = 8: exit %d\n%s%s", code, out, errs)
 	}
+	// And the other way round: an unstaged threshold must not hide what
+	// the staged config, which has none, reports.
+	r.write(".sec/config", cfg+"hook_scan = block\n")
+	r.must("git", "add", ".sec")
+	r.write(".sec/config", cfg+"hook_scan = block\nscan_bpc = 8\nscan_minlen = 30\n")
+	if _, _, code := r.run("segscan", "hook"); code != 1 {
+		t.Errorf("hook with an unstaged scan_bpc = 8: exit %d, want the staged config's finding", code)
+	}
 }
