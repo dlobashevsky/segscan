@@ -95,9 +95,13 @@ by root are accepted. The mode checks stay the same.
 
 That user can change everything in the keystore while segscan runs as
 root, so no keystore file is ever opened by path, for reading or writing:
-- the keystore directory is opened once, `O_DIRECTORY | O_NOFOLLOW` on its
-  last component, and `fstat` on the descriptor must show a directory of
-  mode 0700 owned by the invoking user. Root is not accepted for the
+- the keystore directory is opened once, component by component from a
+  descriptor of `/`, with `O_DIRECTORY | O_NOFOLLOW` on every component
+  (`openat2` with `RESOLVE_NO_SYMLINKS` where available), so a symlink
+  swapped in for an ancestor such as `~/.secshell` is never followed; a
+  missing component is created with `mkdirat` relative to its parent's
+  descriptor and then opened the same way. `fstat` on the final descriptor
+  must show a directory of mode 0700 owned by the invoking user. Root is not accepted for the
   directory itself, so `~/.secshell/<project> -> /root` is refused;
 - every file in it (`keys`, `retired`, `pending`, `check.state`,
   `check.key`) and `files/` and `retired-files/` are opened from that
@@ -712,7 +716,10 @@ Blocking checks (exit 1):
 2. **Names.** Every placeholder's name and uuid are in `names`, and are used
    inside its scope.
 3. **Manifest.** Every file under a node root has a manifest entry, and every
-   type `f`/`l` entry has a file. Type `s` paths must not exist in the tree.
+   type `f`/`l` entry has a file of that type: a symlink declared as `f`, a
+   regular file declared as `l`, or a tracked file at a path declared as
+   `d` is a finding, so a commit that `expand` would refuse is refused here
+   first. Type `s` paths must not exist in the tree.
    No entry lies below an entry of type `f` or `s` (`etc/credential` and
    `etc/credential/token`): an ancestor must be a directory (`d`, or a
    directory the tree implies) or a declared link (`l`). `expand` repeats
@@ -917,7 +924,13 @@ text.
   - runs of at least 8 printable ASCII bytes;
   - runs of at least 8 UTF-16LE characters;
   - gzip, brotli, zip and the Flate streams of a PDF are unpacked first, up to
-    64 MiB unpacked and two levels deep.
+    64 MiB unpacked and two levels deep;
+  - a file in another common compressed or archive format that segscan does
+    not unpack (xz, zstd, bzip2, 7z, rar, recognized by its magic bytes) is
+    a blocking `known_value` finding, "not fully scanned", in check 6, as
+    for a failed unpack (below), so an archive cannot hide a known value
+    just by using an unsupported format. A file that must stay goes into
+    `.sec/allow` as `path:<glob>`.
 
   The statistical scanner reports findings in the strings with the byte
   offset in the `col` field. The length limits apply to it only.
