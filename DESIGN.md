@@ -205,11 +205,15 @@ overwrites an earlier retired version
   nothing is changed.
 - `attr`: zero or more `k=v`:
   - `secret=<name>` for type `s`. The name follows the key name grammar
-    (4.2), so it is one path component and never `.` or `..`. Before
-    opening `files/<name>`, segscan also checks that the resolved path,
-    symlinks followed, is still inside `files/`. A name that fails either
-    check is an error, because under sudo the repository must not choose
-    which file of the deploy machine to copy;
+    (4.2), so it is one path component and never `.` or `..`. The file is
+    opened through a descriptor of the keystore directory, never by path:
+    `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` on Linux 5.6 and
+    later, otherwise `openat(O_DIRECTORY | O_NOFOLLOW)` on `files/` and then
+    `openat(O_NOFOLLOW)` on the name. Under sudo the user who owns the
+    keystore cannot swap in a symlink between a check and the open, and the
+    descriptor is the one that is read. A name that fails is an error,
+    because under sudo the repository must not choose which file of the
+    deploy machine to copy;
   - `acl=<text>` (getfacl short form, `,`-separated);
   - `xattr.<name>=<base64>`;
   - `selinux=<context>`.
@@ -487,7 +491,10 @@ Blocking checks (exit 1):
    key occurs, in any form from 6.3 step 1, in a text file or anywhere in the
    bytes of a binary file (8). No secret file from `files/` is in the
    repository, under any path:
-   - a file whose content equals a secret file is a finding;
+   - a file that contains the whole content of a secret file anywhere, as
+     a substring of its raw or unpacked bytes, is a finding. Equality alone
+     would miss a secret file with only short lines (`abc123\nxyz789`)
+     that was embedded in another file or had a byte appended;
    - so is a file that contains a line of one. Every line of a secret file
      whose text, trimmed of spaces, is at least 8 bytes counts. Shorter lines
      are too common (`}`, `[main]`) to tell anything;
@@ -517,11 +524,15 @@ because only the deploy machine runs check 6. The state holds:
 
 - the ref tips already checked;
 - for every key, a digest of its name, its uuid and the complete sorted set
-  of forms that check 6 searches for it (6.3 step 1). The set changes with
-  the value, with a new transform chain in the repository, and with a
-  segscan release that adds or changes a transform, and any of these counts
-  as a change. For every secret file in `files/`, a digest of its name and
-  of every form searched for it. All digests are HMAC-SHA256 under a random
+  of forms that check 6 searches for it (6.3 step 1), for the current value
+  and every retired one. The set changes with the value, with a rotation,
+  with a new transform chain in the repository, and with a segscan release
+  that adds or changes a transform, and any of these counts as a change.
+  For every secret file, a digest of its name and of every form searched
+  for it, again for the current version in `files/` and every retired one
+  in `retired-files/`. A version that was current and retired again
+  between two clean runs (A, then B, then C) is still part of the set, so
+  it is checked against the whole history like C. All digests are HMAC-SHA256 under a random
   256-bit key kept in its own file, `check.key` (mode 0600), not in
   `check.state`. The state alone does not help to guess a value: without the
   key, a candidate cannot be tested against a digest offline.
