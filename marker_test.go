@@ -21,8 +21,9 @@ func TestMarkLine(t *testing.T) {
 		{"a.yaml", "k: abc\n  def\n", 1, ""},     // multi-line plain scalar
 		{"a.yaml", "k: abc\n  def\n", 2, ""},     // its continuation
 		{"a.sh", "TOKEN=abc\n", 1, "TOKEN=abc # segscan:allow\n"},
-		{"a.sh", "echo \"a\nb\nc\"\n", 2, ""}, // inside a string spanning lines
-		{"a.sh", "echo \"a\nb\"\nX=1\n", 3, "echo \"a\nb\"\nX=1 # segscan:allow\n"},
+		{"a.sh", "echo \"a\nb\nc\"\n", 2, ""},   // inside a string spanning lines
+		{"a.sh", "echo \"a\nb\"\nX=1\n", 3, ""}, // after a string over two lines: in doubt, no
+		{"a.sh", "echo \"a b\"\nX=1\n", 2, "echo \"a b\"\nX=1 # segscan:allow\n"},
 		{"a.sh", "cat <<EOF\nsecret\nEOF\n", 2, ""}, // heredoc
 		{"a.sh", "a=1 \\\n  b=2\n", 1, ""},          // continued
 		{"a.go", "x := \"abc\"\n", 1, "x := \"abc\" // segscan:allow\n"},
@@ -54,7 +55,13 @@ func TestMarkLine(t *testing.T) {
 		{"a.sql", "select 1;\n", 1, "select 1; -- segscan:allow\n"},
 		{"a.rb", "s = \"a\nsecret\"\n", 2, ""}, // Ruby and Perl: not offered
 		{"a.pl", "my $s = 1;\n", 1, ""},
-		{"nginx/n.conf", "return 200 \"a\nsecret\nb\";\n", 2, ""}, // nginx strings span lines
+		{"nginx/n.conf", "return 200 \"a\nsecret\nb\";\n", 2, ""},            // nginx strings span lines
+		{"a.sql", "insert into t values (E'it\\'s\nsecret\nend');\n", 2, ""}, // E'...' with \'
+		{"a.sql", "select 'a';\nselect 2;\n", 2, "select 'a';\nselect 2; -- segscan:allow\n"},
+		{"a.cs", "var s = @$\"a\nsecret\nb\";\n", 2, ""}, // @$"..."
+		{"a.cs", "var s = $@\"a\nsecret\nb\";\n", 2, ""}, // $@"..."
+		{"a.xml", "<!-- a > b\n<x>y</x>\n-->\n", 2, ""},  // inside a comment
+		{"a.xml", "<!-- c -->\n<x>y</x>\n", 2, "<!-- c -->\n<x>y</x> <!-- segscan:allow -->\n"},
 	} {
 		got, err := markLine(c.file, []byte(c.in), c.line)
 		switch {

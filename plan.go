@@ -168,6 +168,12 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				continue
 			}
 			tracked, inHead := p.gitState(a.File)
+			if tracked && p.stagedDiffers(a.File, inHead) {
+				// git rm --cached refuses it; say so before .gitignore
+				// changes, so nothing is half done.
+				r.Skipped = append(r.Skipped, a.File+": the staged version differs from both the file and HEAD; unstage it first (git restore --staged)")
+				continue
+			}
 			if inHead && !a.History {
 				r.Skipped = append(r.Skipped, a.File+": committed in HEAD, its content is in the history; confirm to ignore it anyway")
 				continue
@@ -231,6 +237,18 @@ func (p *plan) gitState(f string) (tracked, inHead bool) {
 	tracked = len(out) > 0
 	inHead = exec.Command("git", "-C", p.top, "cat-file", "-e", "HEAD:"+f).Run() == nil
 	return
+}
+
+// stagedDiffers reports a file whose index version differs from both the
+// working tree and HEAD (or that is new in the index and changed since):
+// git rm --cached refuses to drop such a version.
+func (p *plan) stagedDiffers(f string, inHead bool) bool {
+	diff := func(args ...string) bool {
+		cmd := exec.Command("git", append([]string{"-C", p.top, "--literal-pathspecs", "diff", "--quiet"}, args...)...)
+		return cmd.Run() != nil
+	}
+	worktree := diff("--", f)
+	return worktree && (!inHead || diff("--cached", "--", f))
 }
 
 func (p *plan) inManifest(f string) bool {

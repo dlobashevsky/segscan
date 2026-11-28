@@ -24,6 +24,7 @@ type commentStyle struct {
 	// prefix must start a token: r"..." yes, "user" no)
 	rawOpen   []*regexp.Regexp
 	spanLines bool // quoted strings may continue on the next line (shell, SQL)
+	escSingle bool // a backslash may escape inside single quotes too (SQL E'...')
 	yaml      bool // YAML: quotes only open a scalar; block and multi-line scalars
 	xml       bool
 }
@@ -42,9 +43,9 @@ var (
 	styleC    = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
 	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])b?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
-	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@"|"@`)}}
+	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	// PostgreSQL dollar quotes: $$...$$ and $tag$...$tag$
-	styleSQL = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*"}, spanLines: true,
+	styleSQL = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*"}, spanLines: true, escSingle: true,
 		rawOpen: []*regexp.Regexp{regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)?\$`)}}
 	styleLua = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
 	styleXML = commentStyle{start: "<!--", end: "-->", xml: true}
@@ -166,30 +167,39 @@ func unsafeLine(st commentStyle, lines [][]byte, i int) string {
 	case st.xml:
 		return xmlUnsafe(lines, i)
 	}
-	// Strings that may span lines carry their state from the top of the
-	// file; elsewhere an unterminated string ends with its line.
-	var q byte
+	// Where strings may span lines, every line from the top must close its
+	// own quotes, whether a backslash escapes (E'...' in PostgreSQL, shell
+	// double quotes) or not: a string left open anywhere above, or a line
+	// that reads two ways, and the marker is refused. Elsewhere a string
+	// ends with its line, and only the line itself counts.
+	from := i
 	if st.spanLines {
-		for k := 0; k < i; k++ {
-			q = scanQuotes(st, bytes.TrimRight(lines[k], "\r\n"), q)
-		}
+		from = 0
 	}
-	q = scanQuotes(st, body, q)
-	if q != 0 {
-		return "the end of the line is inside a string"
+	for k := from; k <= i; k++ {
+		l := bytes.TrimRight(lines[k], "\r\n")
+		if scanQuotes(st, l, true) != 0 || scanQuotes(st, l, false) != 0 {
+			if k == i {
+				return "the end of the line may be inside a string"
+			}
+			return fmt.Sprintf("a string may run on from line %d", k+1)
+		}
 	}
 	return ""
 }
 
-// scanQuotes runs the quote state over one line, starting inside quote q
-// (0: outside), and returns the state at its end. A line comment outside
-// quotes ends the line.
-func scanQuotes(st commentStyle, body []byte, q byte) byte {
+// scanQuotes runs the quote state over one line and returns the quote
+// still open at its end (0: none). With esc a backslash escapes the next
+// character inside double quotes, and inside single quotes too where the
+// language has such strings (SQL E'...'); without, it is an ordinary one.
+// A line comment outside quotes ends the line.
+func scanQuotes(st commentStyle, body []byte, esc bool) byte {
+	var q byte
 	for k := 0; k < len(body); k++ {
 		c := body[k]
 		switch {
 		case q != 0:
-			if c == '\\' && q != '\'' {
+			if c == '\\' && esc && (q != '\'' || st.escSingle) {
 				k++
 			} else if c == q {
 				q = 0
@@ -348,6 +358,9 @@ func xmlUnsafe(lines [][]byte, i int) string {
 	low := bytes.ToLower(append(append([]byte{}, before...), lines[i]...))
 	if bytes.Count(low, []byte("<![cdata[")) > bytes.Count(low, []byte("]]>")) {
 		return "the line is inside CDATA"
+	}
+	if bytes.Count(low, []byte("<!--")) > bytes.Count(low, []byte("-->")) {
+		return "the line is inside a comment"
 	}
 	for _, tag := range []string{"script", "style"} {
 		if bytes.LastIndex(low, []byte("<"+tag)) > bytes.LastIndex(low, []byte("</"+tag)) {

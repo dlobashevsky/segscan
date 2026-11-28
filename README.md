@@ -76,8 +76,10 @@ about 3.5-4.5.
   `-n` only prints what would be done. `allow line` writes a comment only
   where it is certainly a comment: for known file types (shell, Python,
   YAML, TOML, Go/C-like, SQL, Lua, XML/HTML, nginx), never inside a string,
-  a YAML block or multi-line scalar, a heredoc or a raw string; JSON, INI,
-  `.env` and Dockerfiles are refused. `ignore` refuses a file committed in
+  a comment, a YAML block or multi-line scalar, a heredoc or a raw string.
+  In shell, SQL and nginx, where strings may run over lines, every line up
+  to the marked one must close its quotes however a backslash is read.
+  JSON, INI, `.env`, Dockerfiles, Ruby and Perl are refused. `ignore` refuses a file committed in
   `HEAD` without `-history`: ignoring it does not take the value out of the
   history.
 - `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary

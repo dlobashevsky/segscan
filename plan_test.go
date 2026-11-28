@@ -73,6 +73,21 @@ func TestCLIIgnore(t *testing.T) {
 	r.must("git", "rm", "-q", "--cached", "foo1.txt")
 	r.write(".gitignore", "")
 
+	// Staged content different from both the file and HEAD: refused
+	// before .gitignore changes.
+	r.write("part.txt", "v1\n")
+	r.must("git", "add", "part.txt")
+	r.must("git", "commit", "-q", "-m", "p", "--", "part.txt")
+	r.write("part.txt", "v2\n")
+	r.must("git", "add", "part.txt")
+	r.write("part.txt", "v3\n")
+	if _, errs, code := r.run("segscan", "ignore", "-history", "part.txt"); code != 1 || !strings.Contains(errs, "staged version") {
+		t.Errorf("partly staged: exit %d %s", code, errs)
+	}
+	if strings.Contains(r.read(".gitignore"), "part.txt") {
+		t.Errorf(".gitignore changed for a refused file")
+	}
+
 	r.must("segscan", "ignore", "new.txt", "staged.txt")
 	if got := r.read(".gitignore"); got != "/new.txt\n/staged.txt\n" {
 		t.Errorf(".gitignore: %q", got)
