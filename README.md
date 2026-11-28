@@ -66,6 +66,20 @@ about 3.5-4.5.
 - `.segscan-allow` in the repository root: one `fp` per line, or `path:glob`
   to skip files. `#` starts a comment.
 - `segscan:allow` on the line itself: the line is not scanned.
+- The same from the command line, without editing by hand:
+
+      segscan allow fp FP...            # fingerprints, with a "# file:line" comment
+      segscan allow path FILE...        # path:/FILE, escaped
+      segscan allow line FILE:LINE...   # segscan:allow in a comment on the line
+      segscan ignore FILE...            # /FILE in .gitignore, and out of the index
+
+  `-n` only prints what would be done. `allow line` writes a comment only
+  where it is certainly a comment: for known file types (shell, Python,
+  YAML, TOML, Go/C-like, SQL, Lua, XML/HTML, nginx), never inside a string,
+  a YAML block or multi-line scalar, a heredoc or a raw string; JSON, INI,
+  `.env` and Dockerfiles are refused. `ignore` refuses a file committed in
+  `HEAD` without `-history`: ignoring it does not take the value out of the
+  history.
 - `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary
   word.
 - Lock files, `*.min.js` and `*.map` are always skipped

@@ -464,7 +464,9 @@ structured, validated by `check`, and full of paths and uuids.
 
 False positives:
 
-- add the `fp` column of the finding to `.sec/allow`, one per line;
+- add the `fp` column of the finding to `.sec/allow`, one per line, or
+  run `segscan allow fp FP` (also `allow path FILE`, `allow line
+  FILE:LINE` and `segscan ignore FILE`; see the README);
 - `path:<glob>` in `.sec/allow` skips whole files, the way `.gitignore`
   does. The glob is matched against the path from the repository top,
   wherever you run segscan and however you name the files (`scan .`,

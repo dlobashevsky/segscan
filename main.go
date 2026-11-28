@@ -24,6 +24,10 @@ const usage = `segscan - statistical secret scanner
                                         train a model (no paths: git ls-files)
   segscan model check [-m model] [-since REV]
                                         dictionary words of the model that look like keys
+  segscan allow fp FP... | allow path FILE... | allow line FILE:LINE... [-n]
+                                        fingerprints, files or one line -> allowlist / marker
+  segscan ignore [-n] [-history] FILE...
+                                        files -> .gitignore, and out of the index
   segscan scan  [flags] [-scanall] [path...|-]
                                         scan files (in git: tracked and untracked, not
                                         ignored, not .sec/; -scanall: every file)
@@ -215,6 +219,10 @@ func main() {
 		cmdImport(args)
 	case "model":
 		cmdModel(args)
+	case "allow":
+		cmdAllow(args)
+	case "ignore":
+		cmdIgnore(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

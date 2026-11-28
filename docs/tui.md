@@ -181,10 +181,14 @@ accepted.
 - **New:** adding to the allowlist and `.gitignore`, the `segscan:allow`
   marker, replacing one stretch of a file by a placeholder.
 
-Every action gets a non-interactive command as well (`segscan allow add`,
-`segscan key move FILE:LINE:COL+LEN -name ...`), so it can be tested
+Every action gets a non-interactive command as well, so it can be tested
 without a terminal and used from scripts. The plan of a session exists
 only in memory and never holds values.
+
+Implemented (`plan.go`, `marker.go`): `segscan allow fp FP...`,
+`allow path FILE...`, `allow line FILE:LINE...` and `segscan ignore
+[-history] FILE...`, all with `-n`. Still to come: `segscan key move
+FILE:LINE:COL+LEN -name ...` (stage 2).
 
 ## Not in scope
 
