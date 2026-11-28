@@ -43,8 +43,9 @@ The launch screen shows the parameters and lets you edit them:
   only);
 - LLM: on or off, server address, context settings.
 
-The last used parameters are kept in `.git/segscan-tui` (local, never
-committed), together with the display settings:
+The last used parameters are kept in `segscan-tui` in the git directory
+(local, never committed; found with `git rev-parse --git-path`, since in a
+linked worktree `.git` is a file), together with the display settings:
 
 | Setting | Meaning |
 |---|---|
@@ -54,7 +55,7 @@ committed), together with the display settings:
 
 **LLM.** Scoring runs in the background, at about 50 findings a minute on
 the CPU. The list appears at once with bpc only, and the scores fill in as
-they arrive. Scores are cached in `.git/segscan-llm.cache`. The cache key
+they arrive. Scores are cached in `segscan-llm.cache` in the git directory. The cache key
 includes the context, so a rescan asks the model only about findings that
 are new or whose line changed.
 
@@ -86,12 +87,16 @@ are new or whose line changed.
 Actions are only marked. Nothing is written until a save (7). A row has at
 most one action.
 
+The allowlist is the one the scan uses: `.sec/allow` in a `.sec/`
+repository, `.segscan-allow` otherwise, or the file given with `-allow` on
+the launch screen.
+
 | Key | Action | Marker | Notes |
 |---|---|---|---|
-| `I` | file → `.gitignore` | `I`, colour 1 | the root `.gitignore`, anchored (`/path/file`), glob characters escaped. A file already in the index but not in `HEAD` is also untracked (`git rm --cached`; nothing reaches the history). A file in `HEAD`: warning, the value is in the history and must be rotated. A file with a `.sec/manifest` entry: warning, `check` will miss the file in a clean clone |
-| `F` | file → `.sec/allow` (`path:/file`) | `F`, colour 2 | |
-| `A` | fingerprint → `.sec/allow` | `A`, colour 3 | applies to every finding with that fp in the tree; all of them are coloured, and the status line says how many there are and in how many files |
-| `M` | `segscan:allow` in a comment on the line | `M`, colour 3 | the comment syntax comes from the file type (`#`, `//`, `--`, `;`, `<!-- -->`); not offered where there are no comments (JSON) or the type is unknown |
+| `I` | file → `.gitignore` | `I`, colour 1 | the root `.gitignore`, anchored (`/path/file`), glob characters escaped. An ignore rule does not stop git from tracking a file it already tracks, so a tracked file is also removed from the index (`git rm --cached`; the file stays on disk). A file in the index but not in `HEAD`: nothing reaches the history. A file in `HEAD`: a separate confirmation, with the warning that the value is in the history. A file with a `.sec/manifest` entry: warning, `check` will miss the file in a clean clone |
+| `F` | file → allowlist (`path:/file`) | `F`, colour 2 | not for `private_key` rows: `check` does not honour `path:` lines for private keys |
+| `A` | fingerprint → allowlist | `A`, colour 3 | applies to every finding with that fp in the tree; all of them are coloured, and the status line says how many there are and in how many files. Not for `private_key` rows: their fp is computed from the `BEGIN ... PRIVATE KEY` line, the same for every key with that marker, so one allow would hide them all |
+| `M` | `segscan:allow` in a comment on the line | `M`, colour 3 | the comment syntax comes from the file type (`#`, `//`, `--`, `;`, `<!-- -->`). Offered only where the end of the line is certainly outside a string: not in JSON, not inside quoted strings, YAML block scalars, heredocs and the like, not for an unknown type. In doubt, not offered |
 | `K` | value → keystore, placeholder in the file | `K`, colour 4 | only with a keystore on this machine; see 5.1 |
 | `U` | unmark | | |
 | `E` | open in `$EDITOR` at the line | | the file is rescanned on return |
@@ -145,11 +150,12 @@ accepted.
   `<keystore>.<YYYYmmdd-HHMMSS>.backup`, with the same modes (0700 for the
   directory, 0600 for the files). Old backups are removed by hand.
 - **Order of writes.**
-  1. keystore (after the backup);
-  2. `.sec/names`;
+  1. `.sec/names` (new names: `key set` needs the name there; the file
+     holds no values);
+  2. keystore (after the backup);
   3. the files themselves: bottom-up within a file and right to left
      within a line, so that earlier replacements do not move later ones;
-  4. `.sec/allow` and `.gitignore`;
+  4. the allowlist and `.gitignore`;
   5. `git rm --cached`.
 
   A value leaves its file only after it is in the keystore. Each write
@@ -170,7 +176,7 @@ accepted.
   journal and lock), writing through a temporary file and a rename, and,
   in `segscan import`, finding the values of keys in a text under every
   transform and replacing them by placeholders.
-- **New:** adding to `.sec/allow` and `.gitignore`, the `segscan:allow`
+- **New:** adding to the allowlist and `.gitignore`, the `segscan:allow`
   marker, replacing one stretch of a file by a placeholder.
 
 Every action gets a non-interactive command as well (`segscan allow add`,
