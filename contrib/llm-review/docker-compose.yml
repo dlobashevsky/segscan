@@ -1,0 +1,43 @@
+# llama-server on CPU for llm-review. Settings come from .env (see .env.example).
+#
+#   cp .env.example .env    # set MODELS_DIR, MODEL_FILE, THREADS
+#   docker compose up -d
+#   curl -s 127.0.0.1:8080/health
+#
+# The port is published on 127.0.0.1 only. The server makes no outbound
+# connections (the model is a local file, not -hf), writes no prompts to disk
+# (no --slot-save-path, no -v), and /slots, which shows the prompts being
+# processed, is turned off.
+services:
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:${LLAMA_IMAGE_TAG:-server}
+    container_name: segscan-llm
+    restart: "no"
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    volumes:
+      - "${MODELS_DIR:?set MODELS_DIR in .env}:/models:ro"
+    command:
+      - -m
+      - "/models/${MODEL_FILE:?set MODEL_FILE in .env}"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --threads
+      - "${THREADS:-6}"
+      - --threads-batch
+      - "${THREADS_BATCH:-12}"
+      - --parallel
+      - "${SLOTS:-2}"
+      - --ctx-size
+      - "${CTX:-8192}"
+      - --cache-reuse
+      - "256"
+      - --checkpoint-min-step
+      - "${CHECKPOINT_MIN_STEP:-8192}"
+      - --jinja
+      - --chat-template-kwargs
+      - '{"enable_thinking":false}'
+      - --no-webui
+      - --no-slots
