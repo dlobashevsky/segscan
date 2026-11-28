@@ -305,16 +305,10 @@ func repoPath(f string) string {
 	if top == "" {
 		return cleanRel(f)
 	}
-	// Only the current directory is resolved: the name itself, a symlink
-	// in the repository included, stays the repository entry being scanned.
-	var abs string
-	if filepath.IsAbs(f) {
-		// An absolute path may reach the checkout through an alias:
-		// resolve its directory, keep its name.
-		abs = filepath.Join(canonical(filepath.Dir(f)), filepath.Base(f))
-	} else {
-		abs = filepath.Join(repoCwd(), f)
-	}
+	// The directory part is resolved (an absolute path may reach the
+	// checkout through an alias); the name itself, a symlink in the
+	// repository included, stays the repository entry being scanned.
+	abs := physAbs(f)
 	rel, err := filepath.Rel(top, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return cleanRel(f)
@@ -366,18 +360,55 @@ func scanFiles(paths []string, all bool) []string {
 				continue
 			}
 			p := string(f)
-			seen[filepath.Clean(p)] = true
 			if rp := repoPath(p); rp != secDir && !strings.HasPrefix(rp, secDir+"/") {
 				files = append(files, p)
+				seen[filepath.Clean(p)] = true
 			}
 		}
 		for _, p := range inside {
 			if st, err := os.Stat(p); err == nil && !st.IsDir() && !seen[filepath.Clean(p)] {
-				files = append(files, p) // named explicitly: read even if ignored
+				files = append(files, p) // named explicitly: read even if ignored or in .sec/
 			}
 		}
 	}
 	return append(files, expand(outside)...)
+}
+
+// physAbs makes p absolute. With a ".." in it, the directory part is
+// resolved the way the system does, component by component, so that ".."
+// after a symlinked directory goes up from its target (filepath.Join would
+// drop both lexically). The last component keeps its own name: a symlink in
+// the repository is the entry being scanned.
+func physAbs(p string) string {
+	if !hasDotDot(p) {
+		// No ".." to misplace: resolve only an absolute path's directory
+		// (an alias of the checkout); a relative one stays as written.
+		if filepath.IsAbs(p) {
+			return filepath.Join(canonical(filepath.Dir(p)), filepath.Base(p))
+		}
+		return filepath.Join(repoCwd(), p)
+	}
+	raw := p
+	if !filepath.IsAbs(p) {
+		raw = repoCwd() + string(filepath.Separator) + p
+	}
+	dir, base := raw, ""
+	if i := strings.LastIndexByte(raw, filepath.Separator); i >= 0 {
+		dir, base = raw[:i], raw[i+1:]
+	}
+	if base == "" || base == "." || base == ".." {
+		return canonical(raw)
+	}
+	return filepath.Join(canonical(dir), base)
+}
+
+func hasDotDot(p string) bool {
+	for _, c := range strings.Split(p, string(filepath.Separator)) {
+		if c == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // cwdRelInRepo reports whether p lies inside the current repository, and
@@ -387,12 +418,7 @@ func cwdRelInRepo(p string) (string, bool) {
 	if top == "" {
 		return "", false
 	}
-	abs := p
-	if filepath.IsAbs(p) {
-		abs = filepath.Join(canonical(filepath.Dir(p)), filepath.Base(p))
-	} else {
-		abs = filepath.Join(repoCwd(), p)
-	}
+	abs := physAbs(p)
 	rel, err := filepath.Rel(top, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return "", false

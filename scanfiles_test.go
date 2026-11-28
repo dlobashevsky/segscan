@@ -84,3 +84,26 @@ func TestCLIScanOutsideGit(t *testing.T) {
 		t.Errorf("no paths outside git: exit %d %s", code, errs)
 	}
 }
+
+// A file named explicitly under .sec/ is read; ".." after a symlinked
+// directory goes up from the symlink's target, as the system resolves it.
+func TestCLIScanExplicitSecAndDotDot(t *testing.T) {
+	r := newRepo(t)
+	const secret = "token = Zx81kq9PmW3vT7bRq2Lp\n"
+	r.write(".sec/leak.txt", secret)
+	r.write("inside.txt", secret)
+	r.must("git", "add", ".sec/leak.txt")
+	if got := scannedFiles(t, r, "", ".sec/leak.txt"); !reflect.DeepEqual(got, []string{".sec/leak.txt"}) {
+		t.Errorf("explicit tracked .sec file: %v", got)
+	}
+	out := t.TempDir()
+	os.MkdirAll(filepath.Join(out, "sub"), 0o755)
+	os.WriteFile(filepath.Join(out, "inside.txt"), []byte(secret), 0o644)
+	if err := os.Symlink(filepath.Join(out, "sub"), filepath.Join(r.dir, "jump")); err != nil {
+		t.Skip(err)
+	}
+	got := scannedFiles(t, r, "", "jump/../inside.txt")
+	if !reflect.DeepEqual(got, []string{"jump/../inside.txt"}) {
+		t.Errorf("jump/../inside.txt should be the file outside the repository: %v", got)
+	}
+}
