@@ -78,6 +78,8 @@ type tty struct {
 	// The reader stops while the editor has the terminal: suspend sends
 	// on pause and waits for paused; resume sends on resumed.
 	pause, paused, resumed chan struct{}
+	gone                   chan struct{} // closed when the reader has ended
+	readerPaused           bool          // the editor has the terminal
 }
 
 func openTTY() (*tty, error) {
@@ -86,7 +88,7 @@ func openTTY() (*tty, error) {
 		return nil, fmt.Errorf("tui: %v", err)
 	}
 	t := &tty{old: old, keys: make(chan string, 256), winch: make(chan os.Signal, 1),
-		pause: make(chan struct{}), paused: make(chan struct{}), resumed: make(chan struct{})}
+		pause: make(chan struct{}), paused: make(chan struct{}), resumed: make(chan struct{}), gone: make(chan struct{})}
 	if sig := winchSignal(); sig != nil {
 		signal.Notify(t.winch, sig)
 	}
@@ -100,16 +102,30 @@ func (t *tty) close() {
 		return
 	}
 	t.done = true
+	t.stopReader() // what is typed from now on is the shell's
 	os.Stdout.WriteString("\x1b[0m\x1b[?25h\x1b[?1049l")
 	restoreTerm(0, t.old)
+}
+
+// stopReader waits until the reader reads no more: it is paused, and
+// stays so unless resume restarts it.
+func (t *tty) stopReader() {
+	if t.readerPaused {
+		return
+	}
+	select {
+	case t.pause <- struct{}{}:
+		<-t.paused
+	case <-t.gone:
+	}
+	t.readerPaused = true
 }
 
 // suspend gives the terminal back (for the editor): the reader stops
 // first, so no key typed in the editor reaches the TUI. resume takes the
 // terminal again and restarts the reader.
 func (t *tty) suspend() {
-	t.pause <- struct{}{}
-	<-t.paused
+	t.stopReader()
 	os.Stdout.WriteString("\x1b[0m\x1b[?25h\x1b[?1049l")
 	restoreTerm(0, t.old)
 }
@@ -117,7 +133,11 @@ func (t *tty) suspend() {
 func (t *tty) resume() {
 	makeRaw(0)
 	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l")
-	t.resumed <- struct{}{}
+	select {
+	case t.resumed <- struct{}{}:
+	case <-t.gone:
+	}
+	t.readerPaused = false
 }
 
 // read turns the bytes of stdin into key names. A read returns after
@@ -125,6 +145,7 @@ func (t *tty) resume() {
 // a key cut between two reads (ESC [ A, a UTF-8 character) is kept until
 // the rest comes; what is still pending after a quiet read is final.
 func (t *tty) read() {
+	defer close(t.gone)
 	buf := make([]byte, 64)
 	var pending []byte
 	for {

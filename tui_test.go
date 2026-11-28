@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 var ansiRE = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
@@ -458,5 +460,40 @@ func TestTUIParamsRoundTrip(t *testing.T) {
 	}
 	if got := splitPaths(out.paths); strings.Join(got, "|") != "name | lead|a b" {
 		t.Errorf("paths %q", got)
+	}
+}
+
+// After stopReader the reader takes nothing more from stdin: what is typed
+// once the TUI has given the terminal back is the shell's.
+func TestTTYStopReader(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = old }()
+	tt := &tty{keys: make(chan string, 16), pause: make(chan struct{}), paused: make(chan struct{}),
+		resumed: make(chan struct{}), gone: make(chan struct{})}
+	go tt.read()
+	w.Write([]byte("x"))
+	if k := <-tt.keys; k != "x" { // the reader is in its next read now
+		t.Fatalf("key %q", k)
+	}
+	stopped := make(chan struct{})
+	go func() { tt.stopReader(); close(stopped) }()
+	time.Sleep(50 * time.Millisecond)
+	w.Write([]byte("z")) // a pipe has no VTIME: this ends the read in progress
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopReader did not return")
+	}
+	w.Write([]byte("y"))
+	r.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 4)
+	n, _ := r.Read(buf)
+	if string(buf[:n]) != "y" {
+		t.Errorf("after stopReader the reader took the input: left %q", buf[:n])
 	}
 }
