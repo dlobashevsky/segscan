@@ -324,3 +324,21 @@ func TestPlanHashCheckAllFiles(t *testing.T) {
 		t.Errorf("the allowlist was written although b.conf changed")
 	}
 }
+
+// A file name with a newline cannot add a line to the allowlist through
+// the "# file:line" comment.
+func TestPlanAllowFPCommentNewline(t *testing.T) {
+	dir := t.TempDir()
+	p := &plan{top: dir, allowPath: filepath.Join(dir, ".segscan-allow"), actions: []action{
+		{Kind: actAllowFP, FP: "abcdef012345", File: "evil\npath:/victim #", Line: 3},
+	}}
+	if _, err := p.apply(false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(p.allowPath)
+	a := &allowList{fp: map[string]bool{}}
+	a.add(data)
+	if len(a.paths) != 0 || !a.fp["abcdef012345"] || strings.Count(string(data), "\n") != 1 {
+		t.Errorf("allowlist:\n%s\npaths %v", data, a.paths)
+	}
+}

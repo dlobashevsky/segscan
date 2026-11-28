@@ -429,3 +429,18 @@ func TestTUIAHiddenOccurrences(t *testing.T) {
 		t.Errorf("hidden file changed: dropped %d, %v", d, n.fpMark)
 	}
 }
+
+// An invalid UTF-8 byte is skipped, alone or at the end of input.
+func TestDecodeKeysInvalidUTF8(t *testing.T) {
+	for _, in := range []string{"\xff", "a\xfe", "\xc3", "\xffj"} {
+		got := decodeKeys([]byte(in))
+		for _, k := range got {
+			if k == "�" {
+				t.Errorf("%q: a replacement character as a key: %q", in, got)
+			}
+		}
+	}
+	if got := decodeKeys([]byte("\xffj")); strings.Join(got, ",") != "j" {
+		t.Errorf("got %q", got)
+	}
+}

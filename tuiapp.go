@@ -219,10 +219,11 @@ func decodeKeysPartial(b []byte, final bool) (out []string, rest []byte) {
 			if b[0] < 0x20 {
 				break
 			}
-			r, size := []rune(string(b)), 0
-			if len(r) > 0 {
-				size = len(string(r[0]))
-				out = append(out, string(r[0]))
+			// the bytes the character took: an invalid byte is one, and
+			// stands for nothing
+			r, size := utf8.DecodeRune(b)
+			if r != utf8.RuneError || size > 1 {
+				out = append(out, string(r))
 			}
 			b = b[max(size, 1):]
 			continue

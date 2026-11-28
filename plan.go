@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -122,7 +123,14 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				continue
 			}
 			if a.File != "" {
-				line += fmt.Sprintf("  # %s:%d", a.File, a.Line) // where it was seen, never the text
+				// where it was seen, never the text; a name with a newline
+				// or another control character is quoted, or it would end
+				// the comment and start a line of its own (path:...)
+				name := a.File
+				if strings.IndexFunc(name, func(c rune) bool { return c < 0x20 || c == 0x7f }) >= 0 {
+					name = strconv.Quote(name)
+				}
+				line += fmt.Sprintf("  # %s:%d", name, a.Line)
 			}
 			allowLines = append(allowLines, line)
 		case actAllowFile:
