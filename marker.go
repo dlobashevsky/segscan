@@ -42,7 +42,7 @@ var (
 	styleJS = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
 	styleC  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
 	// Rust: ordinary strings may span lines too
-	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, spanLines: true, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])b?r#*"`)}}
+	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, spanLines: true, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	// PostgreSQL dollar quotes: $$...$$ and $tag$...$tag$
@@ -93,6 +93,10 @@ func styleFor(p string) (commentStyle, bool) {
 	return commentStyle{}, false
 }
 
+// directiveRE: comments that tools read (linters, editors, encodings, build
+// constraints). A marker appended to one would become part of it.
+var directiveRE = regexp.MustCompile(`(?i)(shellcheck|yamllint|noqa|pylint|flake8|mypy|type:\s*ignore|eslint|prettier|nolint|go:|\+build|rubocop|isort|fmt:|vim?:|-\*-|coding[:=]|ex:|kate:)`)
+
 // markLine returns the file with the marker added to line no (1-based), or
 // why it cannot be done.
 func markLine(repoPath string, data []byte, no int) ([]byte, error) {
@@ -110,8 +114,14 @@ func markLine(repoPath string, data []byte, no int) ([]byte, error) {
 	if bytes.Contains(body, allowMarker) {
 		return data, nil // already marked
 	}
+	if no == 1 && bytes.HasPrefix(body, []byte("#!")) {
+		return nil, fmt.Errorf("%s:1: a #! line: added text would become an argument of the interpreter", repoPath)
+	}
 	if why := unsafeLine(st, lines, no-1); why != "" {
 		return nil, fmt.Errorf("%s:%d: %s", repoPath, no, why)
+	}
+	if st.end == "" && hasLineComment(st, body) && directiveRE.Match(body) {
+		return nil, fmt.Errorf("%s:%d: the comment on the line is read by a tool; text added to it could change what it says", repoPath, no)
 	}
 	var add string
 	if st.end == "" && hasLineComment(st, body) {

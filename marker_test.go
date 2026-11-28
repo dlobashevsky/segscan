@@ -50,7 +50,13 @@ func TestMarkLine(t *testing.T) {
 		{"a.cpp", "auto s = R\"(a\nsecret)\";\n", 2, ""},
 		// no false alarm: a string ending in r is not a raw string
 		{"a.rs", "let u = \"user\";\n", 1, "let u = \"user\"; // segscan:allow\n"},
-		{"a.rs", "let s = \"first\nsecret\nlast\";\n", 2, ""}, // a Rust string over lines
+		{"a.rs", "let s = \"first\nsecret\nlast\";\n", 2, ""},          // a Rust string over lines
+		{"a.rs", "let s = cr#\"first \" x\nsecret\nlast\"#;\n", 2, ""}, // raw C string
+		{"a.sh", "#!/nix/store/abc-bash/bin/sh\n", 1, ""},              // shebang
+		{"a.py", "#!/usr/bin/env python3\nx = 1\n", 1, ""},
+		{"a.sh", "x=1 # shellcheck disable=SC2034\n", 1, ""}, // a tool's directive
+		{"a.yaml", "k: v # yamllint disable-line\n", 1, ""},
+		{"a.py", "k = 1  # noqa: E501\n", 1, ""},
 		{"a.go", "u := \"server\"\n", 1, "u := \"server\" // segscan:allow\n"},
 		{"a.sql", "insert into t values ($p$a\nsecret\n$p$);\n", 2, ""}, // tagged dollar quote
 		{"a.sql", "select 1;\n", 1, "select 1; -- segscan:allow\n"},
