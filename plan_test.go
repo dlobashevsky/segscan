@@ -79,7 +79,8 @@ func TestCLIAllowFPScoped(t *testing.T) {
 		t.Errorf("scan:\n%s", out)
 	}
 	// From another directory, the path is still the repository path.
-	cmd := exec.Command(filepath.Join(r.bin, "segscan"), "scan", "-no-header", "-allow", "../.segscan-allow", "x.conf", "y.conf")
+	// The allowlist is the one at the top, from here too.
+	cmd := exec.Command(filepath.Join(r.bin, "segscan"), "scan", "-no-header", "x.conf", "y.conf")
 	cmd.Dir, cmd.Env = filepath.Join(r.dir, "app"), r.env
 	if out, err := cmd.CombinedOutput(); strings.Contains(string(out), "x.conf") || !strings.Contains(string(out), "y.conf") {
 		t.Errorf("scan from app/: %v\n%s", err, out)
@@ -100,6 +101,19 @@ func TestCLIAllowFPScoped(t *testing.T) {
 	}
 	if _, _, code := r.run("segscan", "allow", "fp", "-path", "/x", "-file", "app/y.conf", fp); code == 0 {
 		t.Errorf("-path and -file together should be refused")
+	}
+	if _, errs, code := r.run("segscan", "allow", "fp", "-file", "nodes", fp); code == 0 || !strings.Contains(errs, "a directory") {
+		t.Errorf("-file with a directory: exit %d %s", code, errs)
+	}
+
+	// Run from a subdirectory: the allowlist at the top is written.
+	cmd = exec.Command(filepath.Join(r.bin, "segscan"), "allow", "fp", "-file", "y.conf", fp)
+	cmd.Dir, cmd.Env = filepath.Join(r.dir, "app"), r.env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("allow from app/: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "app", ".segscan-allow")); err == nil {
+		t.Errorf("allow from app/ wrote app/.segscan-allow")
 	}
 }
 

@@ -41,7 +41,13 @@ func cmdAllow(args []string) {
 		case *inFile != "" && *inGlob != "":
 			die(fmt.Errorf("allow fp: -file or -path, not both"))
 		case *inFile != "":
-			glob = "/" + globEscape(mustRepoFile(*inFile))
+			// A directory would make path:/dir, which covers every file
+			// below it: -file is one file.
+			f := mustRepoFile(*inFile)
+			if st, err := os.Stat(*inFile); (err == nil && st.IsDir()) || p.indexDir(f) {
+				die(fmt.Errorf("allow fp -file %s: a directory; use -path for a glob", *inFile))
+			}
+			glob = "/" + globEscape(f)
 		case *inGlob != "":
 			glob = *inGlob
 		}

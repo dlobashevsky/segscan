@@ -123,6 +123,11 @@ func (c *common) finish(fs *flag.FlagSet) {
 	}
 	top := secRoot()
 	if top == "" {
+		// .segscan-allow is the one at the repository top, from any
+		// directory: allow writes it there and scan reads it there.
+		if t := repoTop(); t != "" && !c.set["allow"] {
+			c.allow = filepath.Join(t, ".segscan-allow")
+		}
 		return
 	}
 	cfg, err := loadSecConfig(top)
