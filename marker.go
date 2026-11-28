@@ -50,7 +50,8 @@ var (
 // SQL (bracketed and backtick identifiers, dollar, E and q strings, by dialect)
 // and XML/HTML (markup mixed with text) are not offered either: too many
 // ways for the end of a line to be inside a value. Ruby, Perl and JS/TS
-// (JSX child text is not code) likewise.
+// (JSX child text is not code) likewise, Scala (XML literals) and Swift
+// (multi-line regex literals).
 func styleFor(p string) (commentStyle, bool) {
 	base := path.Base(p)
 	switch strings.ToLower(path.Ext(base)) {
@@ -68,7 +69,7 @@ func styleFor(p string) (commentStyle, bool) {
 		return styleC, true
 	case ".rs":
 		return styleRust, true
-	case ".java", ".kt", ".scala", ".swift":
+	case ".java", ".kt":
 		return styleJVM, true
 	case ".cs":
 		return styleCS, true
@@ -299,7 +300,10 @@ func yamlOpensLine(l []byte) string {
 	// An odd number of quotes of either kind anywhere on the line: a
 	// string may run on, whatever comes before it (a tag, an anchor, an
 	// explicit key "? "). A plain "don't" refuses too: in doubt, no.
-	if bytes.Count(t, []byte(`"`))%2 != 0 || bytes.Count(t, []byte(`'`))%2 != 0 {
+	// Double quotes are counted twice, as written and without the ones a
+	// backslash escapes: "first \" x" is even one way and odd the other.
+	if bytes.Count(t, []byte(`"`))%2 != 0 || bytes.Count(t, []byte(`'`))%2 != 0 ||
+		(bytes.Count(t, []byte(`"`))-bytes.Count(t, []byte(`\"`)))%2 != 0 {
 		return "an unbalanced quote: a string may run over lines"
 	}
 	if len(val) > 0 && (val[0] == '"' || val[0] == '\'') && !yamlQuotedCloses(val) {

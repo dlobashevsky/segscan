@@ -75,15 +75,15 @@ about 3.5-4.5.
 
   `-n` only prints what would be done. `allow line` writes a comment only
   where it is certainly a comment: for known file types (shell, Python,
-  YAML, TOML, Go/C/Rust/JVM/C#, Lua, nginx), never inside a string, a
-  comment, a YAML block or multi-line scalar, a heredoc or a raw string,
-  never on a `#!` line or a line that already holds the comment character
-  (`#`, `//`, `--`) anywhere. Every line up to the marked one must close
-  its own quotes however a backslash is read, since a string may run over
-  lines in almost any language. JSON,
-  INI, `.env`, Dockerfiles, SQL, XML/HTML, JS/TS, Ruby and Perl are
-  refused: use `allow fp`. `ignore` refuses a file committed in `HEAD`
-  without `-history`, a directory, and a file whose staged version
+  YAML, TOML, Go/C/Rust/Java/Kotlin/C#, Lua, nginx), never inside a
+  string, a comment, a YAML block or multi-line scalar, a heredoc or a
+  raw string, never on a `#!` line or a line that already holds the
+  comment character (`#`, `//`, `--`) anywhere. Every line up to the
+  marked one must close its own quotes however a backslash is read,
+  since a string may run over lines in almost any language. JSON, INI,
+  `.env`, Dockerfiles, SQL, XML/HTML, JS/TS, Scala, Swift, Ruby and Perl
+  are refused: use `allow fp`. `ignore` refuses a file committed in
+  `HEAD` without `-history`, a directory, and a file whose staged version
   differs from both the file and `HEAD`: ignoring it does not take the
   value out of the history.
 - `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary
