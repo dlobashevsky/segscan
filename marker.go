@@ -296,10 +296,11 @@ func yamlOpensLine(l []byte) string {
 		}
 		val = bytes.TrimSpace(val[sp:])
 	}
-	// An odd number of double quotes anywhere on the line: a string may
-	// run on, whatever the line looks like.
-	if bytes.Count(t, []byte(`"`))%2 != 0 {
-		return "an unbalanced double quote: a string may run over lines"
+	// An odd number of quotes of either kind anywhere on the line: a
+	// string may run on, whatever comes before it (a tag, an anchor, an
+	// explicit key "? "). A plain "don't" refuses too: in doubt, no.
+	if bytes.Count(t, []byte(`"`))%2 != 0 || bytes.Count(t, []byte(`'`))%2 != 0 {
+		return "an unbalanced quote: a string may run over lines"
 	}
 	if len(val) > 0 && (val[0] == '"' || val[0] == '\'') && !yamlQuotedCloses(val) {
 		return "a quoted YAML scalar runs over lines"

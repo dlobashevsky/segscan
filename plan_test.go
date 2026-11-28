@@ -89,6 +89,14 @@ func TestCLIIgnore(t *testing.T) {
 		t.Errorf(".gitignore changed for a refused file")
 	}
 
+	// A tracked directory gone from the working tree: still a directory.
+	r.write("gone/y.txt", "y\n")
+	r.must("git", "add", "gone/y.txt")
+	r.must("git", "commit", "-q", "-m", "g", "--", "gone/y.txt")
+	os.RemoveAll(filepath.Join(r.dir, "gone"))
+	if _, errs, code := r.run("segscan", "ignore", "-history", "gone"); code != 1 || !strings.Contains(errs, "a directory") {
+		t.Errorf("deleted directory: exit %d %s", code, errs)
+	}
 	// A directory: refused before .gitignore changes.
 	r.write("dir/x.txt", "x\n")
 	if _, errs, code := r.run("segscan", "ignore", "-history", "dir"); code != 1 || !strings.Contains(errs, "a directory") {

@@ -168,7 +168,7 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				r.Skipped = append(r.Skipped, fmt.Sprintf("%q: a newline in the name; not ignored", a.File))
 				continue
 			}
-			if st, err := os.Lstat(filepath.Join(p.top, a.File)); err == nil && st.IsDir() {
+			if st, err := os.Lstat(filepath.Join(p.top, a.File)); (err == nil && st.IsDir()) || p.indexDir(a.File) {
 				r.Skipped = append(r.Skipped, a.File+": a directory; name its files, or add it to .gitignore by hand")
 				continue
 			}
@@ -243,6 +243,18 @@ func (p *plan) gitState(f string) (tracked, inHead bool) {
 	tracked = len(out) > 0
 	inHead = exec.Command("git", "-C", p.top, "cat-file", "-e", "HEAD:"+f).Run() == nil
 	return
+}
+
+// indexDir reports whether the index holds files below f: a directory
+// git still tracks, even if it is gone from the working tree.
+func (p *plan) indexDir(f string) bool {
+	out, _ := exec.Command("git", "-C", p.top, "--literal-pathspecs", "ls-files", "-z", "--", f).Output()
+	for _, e := range bytes.Split(out, []byte{0}) {
+		if bytes.HasPrefix(e, []byte(f+"/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // stagedDiffers reports a file whose index version differs from both the

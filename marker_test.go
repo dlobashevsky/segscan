@@ -14,13 +14,15 @@ func TestMarkLine(t *testing.T) {
 		{"a.yaml", "db:\n  password: abc123\n", 2, "db:\n  password: abc123 # segscan:allow\n"},
 		{"a.yaml", "k: \"a#b\"\n", 1, ""}, // any # on the line refuses
 		{"a.yaml", "k: \"ab\"\n", 1, "k: \"ab\" # segscan:allow\n"},
-		{"a.yaml", "name: don't\n", 1, "name: don't # segscan:allow\n"},
-		{"a.yaml", "k: v # note\n", 1, ""},       // never into an existing comment
-		{"a.yaml", "k: \"abc\n  def\"\n", 1, ""}, // quoted scalar open at the end
-		{"a.yaml", "cert: |\n  ABC\n", 2, ""},    // block scalar
-		{"a.yaml", "cert: >-\n  ABC\n", 2, ""},   // folded block scalar
-		{"a.yaml", "k: abc\n  def\n", 1, ""},     // multi-line plain scalar
-		{"a.yaml", "k: abc\n  def\n", 2, ""},     // its continuation
+		{"a.yaml", "name: dont\n", 1, "name: dont # segscan:allow\n"},
+		{"a.yaml", "name: don't\n", 1, ""},                                // in doubt: an odd quote
+		{"a.yaml", "? 'first\n  password: secret\n  last'\n: v\n", 2, ""}, // explicit key
+		{"a.yaml", "k: v # note\n", 1, ""},                                // never into an existing comment
+		{"a.yaml", "k: \"abc\n  def\"\n", 1, ""},                          // quoted scalar open at the end
+		{"a.yaml", "cert: |\n  ABC\n", 2, ""},                             // block scalar
+		{"a.yaml", "cert: >-\n  ABC\n", 2, ""},                            // folded block scalar
+		{"a.yaml", "k: abc\n  def\n", 1, ""},                              // multi-line plain scalar
+		{"a.yaml", "k: abc\n  def\n", 2, ""},                              // its continuation
 		{"a.sh", "TOKEN=abc\n", 1, "TOKEN=abc # segscan:allow\n"},
 		{"a.sh", "echo \"a\nb\nc\"\n", 2, ""},   // inside a string spanning lines
 		{"a.sh", "echo \"a\nb\"\nX=1\n", 3, ""}, // after a string over two lines: in doubt, no
