@@ -1,0 +1,637 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strconv"
+	"strings"
+)
+
+// segscan tui: the terminal side. The state and the keys are in tui.go.
+
+// dieHook restores the terminal before die exits.
+var dieHook func()
+
+type tuiParams struct {
+	paths        string
+	bpc, minlen  string
+	showAllowed  bool
+	previewLines int
+}
+
+func cmdTUI(args []string) {
+	fs, c := flags("tui")
+	now := fs.Bool("now", false, "scan at once, without the launch screen")
+	fs.Parse(args)
+	c.finish(fs)
+	if !isTerminal(0) || !isTerminal(1) {
+		die(fmt.Errorf("tui: stdin and stdout must be a terminal"))
+	}
+	top := repoTop()
+	if top == "" {
+		die(fmt.Errorf("tui: not a git repository"))
+	}
+	allowPath := allowFilePath(c.allow)
+	m := mustModel(c) // before the screen: it may print a note
+	p := loadTUIParams()
+	if fs.NArg() > 0 {
+		p.paths = strings.Join(fs.Args(), " ")
+	}
+	if c.set["bpc"] || (p.bpc == "" && c.o.MinBpc > 0) {
+		p.bpc = strconv.FormatFloat(c.o.MinBpc, 'f', -1, 64)
+	}
+	if c.set["minlen"] {
+		p.minlen = strconv.Itoa(c.o.MinLen)
+	}
+
+	t, err := openTTY()
+	if err != nil {
+		die(err)
+	}
+	dieHook = t.close
+	defer t.close()
+
+	if !*now {
+		var ok bool
+		if p, ok = t.launch(p); !ok {
+			return
+		}
+	}
+	saveTUIParams(p)
+	app := &tuiApp{c: c, m: m, top: top, allowPath: allowPath, p: p, t: t}
+	app.run()
+}
+
+// ---------- the terminal ----------
+
+type tty struct {
+	old   *termState
+	keys  chan string
+	winch chan os.Signal
+	done  bool
+}
+
+func openTTY() (*tty, error) {
+	old, err := makeRaw(0)
+	if err != nil {
+		return nil, fmt.Errorf("tui: %v", err)
+	}
+	t := &tty{old: old, keys: make(chan string, 64), winch: make(chan os.Signal, 1)}
+	if sig := winchSignal(); sig != nil {
+		signal.Notify(t.winch, sig)
+	}
+	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l")
+	go t.read()
+	return t, nil
+}
+
+func (t *tty) close() {
+	if t.done {
+		return
+	}
+	t.done = true
+	os.Stdout.WriteString("\x1b[0m\x1b[?25h\x1b[?1049l")
+	restoreTerm(0, t.old)
+}
+
+// suspend gives the terminal back (for the editor); resume takes it again.
+func (t *tty) suspend() {
+	os.Stdout.WriteString("\x1b[0m\x1b[?25h\x1b[?1049l")
+	restoreTerm(0, t.old)
+}
+
+func (t *tty) resume() {
+	makeRaw(0)
+	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l")
+}
+
+// read turns the bytes of stdin into key names.
+func (t *tty) read() {
+	r := bufio.NewReader(os.Stdin)
+	buf := make([]byte, 64)
+	for {
+		n, err := r.Read(buf)
+		if err != nil {
+			close(t.keys)
+			return
+		}
+		for _, k := range decodeKeys(buf[:n]) {
+			t.keys <- k
+		}
+	}
+}
+
+var escKeys = map[string]string{
+	"\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left",
+	"\x1bOA": "up", "\x1bOB": "down", "\x1bOC": "right", "\x1bOD": "left",
+	"\x1b[5~": "pgup", "\x1b[6~": "pgdn",
+	"\x1b[H": "home", "\x1b[1~": "home", "\x1bOH": "home", "\x1b[7~": "home",
+	"\x1b[F": "end", "\x1b[4~": "end", "\x1bOF": "end", "\x1b[8~": "end",
+	"\x1b[3~": "delete",
+}
+
+// decodeKeys splits one read of the terminal into keys. A lone ESC (no
+// sequence after it in the same read) is "esc".
+func decodeKeys(b []byte) []string {
+	var out []string
+	for len(b) > 0 {
+		if b[0] == 0x1b {
+			matched := false
+			for seq, name := range escKeys {
+				if bytes.HasPrefix(b, []byte(seq)) {
+					out = append(out, name)
+					b = b[len(seq):]
+					matched = true
+					break
+				}
+			}
+			if matched {
+				continue
+			}
+			if len(b) > 1 && (b[1] == '[' || b[1] == 'O') {
+				// an unknown sequence: skip to its final byte
+				k := 2
+				for k < len(b) && (b[k] < 0x40 || b[k] > 0x7e) {
+					k++
+				}
+				b = b[min(k+1, len(b)):]
+				continue
+			}
+			out = append(out, "esc")
+			b = b[1:]
+			continue
+		}
+		switch b[0] {
+		case '\r', '\n':
+			out = append(out, "enter")
+		case 0x7f, 0x08:
+			out = append(out, "backspace")
+		case 0x03:
+			out = append(out, "ctrl-c")
+		case '\t':
+			out = append(out, "tab")
+		default:
+			if b[0] < 0x20 {
+				break
+			}
+			r, size := []rune(string(b)), 0
+			if len(r) > 0 {
+				size = len(string(r[0]))
+				out = append(out, string(r[0]))
+			}
+			b = b[max(size, 1):]
+			continue
+		}
+		b = b[1:]
+	}
+	return out
+}
+
+func (t *tty) draw(lines []string) {
+	var b strings.Builder
+	b.WriteString("\x1b[H")
+	for i, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\x1b[0m\x1b[K")
+		if i < len(lines)-1 {
+			b.WriteString("\r\n")
+		}
+	}
+	os.Stdout.WriteString(b.String())
+}
+
+func (t *tty) size() (int, int) {
+	w, h, err := termSize(1)
+	if err != nil || w < 20 || h < 8 {
+		return 80, 24
+	}
+	return w, h
+}
+
+// next waits for a key; a resize gives "resize".
+func (t *tty) next() (string, bool) {
+	select {
+	case k, ok := <-t.keys:
+		return k, ok
+	case <-t.winch:
+		return "resize", true
+	}
+}
+
+// ---------- the launch screen ----------
+
+func (t *tty) launch(p tuiParams) (tuiParams, bool) {
+	type field struct {
+		name string
+		val  *string
+		flag *bool
+		help string
+	}
+	pl := strconv.Itoa(p.previewLines)
+	fields := []field{
+		{"paths", &p.paths, nil, "files and directories; empty: what git would commit"},
+		{"bpc", &p.bpc, nil, "report only findings of at least N bits per char; empty: none"},
+		{"minlen", &p.minlen, nil, "minimum length of a finding; empty: the default"},
+		{"show allowed", nil, &p.showAllowed, "also list findings whose fp is in the allowlist, dimmed"},
+		{"preview lines", &pl, nil, "lines shown above and below the finding"},
+	}
+	cur, editing := 0, false
+	for {
+		w, h := t.size()
+		var lines []string
+		lines = append(lines, ansiBold+fit(" segscan tui: what to scan", w)+ansiReset, "")
+		for i, f := range fields {
+			v := ""
+			if f.flag != nil {
+				v = "no"
+				if *f.flag {
+					v = "yes"
+				}
+			} else {
+				v = *f.val
+			}
+			if editing && i == cur {
+				v += "█"
+			}
+			l := fmt.Sprintf("  %-14s %s", f.name, v)
+			if i == cur {
+				l = ansiReverse + fit(l, w) + ansiReset
+			}
+			lines = append(lines, l)
+		}
+		scan := "  [ scan ]"
+		if cur == len(fields) {
+			scan = ansiReverse + fit(scan, w) + ansiReset
+		}
+		lines = append(lines, "", scan, "")
+		if cur < len(fields) {
+			lines = append(lines, ansiDim+fit("  "+fields[cur].help, w)+ansiReset)
+		}
+		for len(lines) < h-1 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, fit(" up/down choose   enter edit, toggle or scan   esc quit", w))
+		t.draw(lines[:h])
+
+		k, ok := t.next()
+		if !ok {
+			return p, false
+		}
+		if editing {
+			f := fields[cur]
+			switch k {
+			case "enter", "esc":
+				editing = false
+			case "backspace":
+				if r := []rune(*f.val); len(r) > 0 {
+					*f.val = string(r[:len(r)-1])
+				}
+			default:
+				if len([]rune(k)) == 1 {
+					*f.val += k
+				}
+			}
+			continue
+		}
+		switch k {
+		case "up", "k":
+			if cur > 0 {
+				cur--
+			}
+		case "down", "j", "tab":
+			if cur < len(fields) {
+				cur++
+			}
+		case "enter", " ":
+			if cur == len(fields) {
+				p.previewLines, _ = strconv.Atoi(pl)
+				if p.previewLines <= 0 {
+					p.previewLines = 3
+				}
+				return p, true
+			}
+			if fields[cur].flag != nil {
+				*fields[cur].flag = !*fields[cur].flag
+			} else if k == "enter" {
+				editing = true
+			}
+		case "esc", "q", "ctrl-c":
+			return p, false
+		}
+	}
+}
+
+// ---------- the session ----------
+
+type tuiApp struct {
+	c         *common
+	m         *Model
+	top       string
+	allowPath string
+	p         tuiParams
+	t         *tty
+	s         *tuiState
+	lines     map[string][]string
+}
+
+func (a *tuiApp) run() {
+	a.scan()
+	for {
+		a.s.w, a.s.h = a.t.size()
+		a.s.clamp()
+		a.t.draw(a.s.render())
+		k, ok := a.t.next()
+		if !ok {
+			return
+		}
+		if k != "resize" {
+			a.s.key(k)
+		}
+		switch {
+		case a.s.quit:
+			acts := a.s.planActions()
+			a.t.close()
+			if a.s.applyOnQuit && len(acts) > 0 {
+				p := &plan{top: a.top, allowPath: a.allowPath, actions: acts}
+				r, err := p.apply(false)
+				printApply(r, err)
+			}
+			return
+		case a.s.saveNow:
+			a.s.saveNow = false
+			a.save()
+		case a.s.editFile != "":
+			a.edit(a.s.editFile, a.s.editLine)
+			a.s.editFile = ""
+		case a.s.rescan:
+			a.s.rescan = false
+			a.scan()
+		}
+	}
+}
+
+// scan (re)builds the list. Marks on a file that has not changed are kept;
+// those on a changed file are dropped and said so.
+func (a *tuiApp) scan() {
+	o := a.c.o
+	if v, err := strconv.ParseFloat(strings.TrimSpace(a.p.bpc), 64); err == nil && v >= 0 {
+		o.MinBpc = v
+	} else if strings.TrimSpace(a.p.bpc) == "" {
+		o.MinBpc = 0
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(a.p.minlen)); err == nil && v > 0 {
+		o.MinLen = v
+	}
+	allow := loadAllow(a.c.allow, !a.c.noDef)
+	scanAllow := allow
+	if a.p.showAllowed {
+		// fingerprints (bare and with path:) are shown, dimmed; path:
+		// lines still skip their files
+		scanAllow = &allowList{fp: map[string]bool{}, paths: allow.paths, words: allow.words}
+	}
+	var rows []*tuiRow
+	hashes := map[string]string{}
+	sc := &fileScan{sc: NewScanner(a.m, o), allow: scanAllow}
+	for _, f := range scanFiles(strings.Fields(a.p.paths), false) {
+		rp := repoPath(f)
+		if allow.skipPath(rp) {
+			continue
+		}
+		data, ok := readText(f)
+		if !ok {
+			continue
+		}
+		hashes[rp] = fileHash(data)
+		sc.out = func(x Finding) {
+			fp := x.FP()
+			rows = append(rows, &tuiRow{f: x, file: rp, fp: fp, allowed: allow.allowFP(fp, rp)})
+		}
+		sc.rel = rp
+		sc.data(f, data)
+	}
+	old := a.s
+	a.s = newTUIState(rows)
+	a.s.hashes = hashes
+	a.s.previewLines = a.p.previewLines
+	a.lines = map[string][]string{}
+	a.s.source = a.source
+	a.s.ignore = func(f string) bool { _, inHead, _ := (&plan{top: a.top}).gitState(f); return inHead }
+	if old != nil {
+		a.s.sortMode, a.s.hideMarked, a.s.onlyFile, a.s.folded = old.sortMode, old.hideMarked, old.onlyFile, old.folded
+		dropped := 0
+		keep := func(f string) bool {
+			if old.hashes[f] == hashes[f] {
+				return true
+			}
+			dropped++
+			return false
+		}
+		for f, k := range old.fileMark {
+			if keep(f) {
+				a.s.fileMark[f], a.s.fileHist[f] = k, old.fileHist[f]
+			}
+		}
+		for k := range old.fpHere {
+			if keep(k[strings.IndexByte(k, 0)+1:]) {
+				a.s.fpHere[k] = true
+			}
+		}
+		for fp := range old.fpMark {
+			a.s.fpMark[fp] = true
+		}
+		a.s.rebuild()
+		if dropped > 0 {
+			a.s.msg = fmt.Sprintf("%d mark(s) dropped: their files changed", dropped)
+		}
+	}
+}
+
+func (a *tuiApp) source(f string) []string {
+	if l, ok := a.lines[f]; ok {
+		return l
+	}
+	data, _ := os.ReadFile(f)
+	l := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	a.lines[f] = l
+	return l
+}
+
+// save shows what the plan will do, applies it on y, checks the tree and
+// rescans.
+func (a *tuiApp) save() {
+	p := &plan{top: a.top, allowPath: a.allowPath, actions: a.s.planActions()}
+	r, err := p.apply(true)
+	lines := applyLines(r)
+	if err != nil {
+		lines = append(lines, "error: "+err.Error())
+	}
+	apply := false
+	a.s.dialog = &tuiDialog{title: "Save: apply these changes?", lines: lines, keys: "y apply   n back",
+		on: func(s *tuiState, k string) bool {
+			switch k {
+			case "y":
+				apply = true
+				return true
+			case "n", "esc":
+				return true
+			}
+			return false
+		}}
+	for a.s.dialog != nil {
+		a.s.w, a.s.h = a.t.size()
+		a.t.draw(a.s.render())
+		k, ok := a.t.next()
+		if !ok {
+			return
+		}
+		if k != "resize" {
+			a.s.key(k)
+		}
+	}
+	if !apply {
+		return
+	}
+	r, err = p.apply(false)
+	lines = applyLines(r)
+	if err != nil {
+		lines = append(lines, "error: "+err.Error())
+	}
+	lines = append(lines, "")
+	lines = append(lines, a.check()...)
+	a.s.clearMarks()
+	a.scan()
+	a.s.dialog = &tuiDialog{title: "Saved", lines: lines, keys: "any key", on: func(*tuiState, string) bool { return true }}
+}
+
+// check runs the working-tree checks of segscan check, as cmdCheck does
+// without flags, in a .sec/ repository.
+func (a *tuiApp) check() []string {
+	top := secRoot()
+	if top == "" {
+		return []string{"(no .sec/: segscan check not run)"}
+	}
+	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
+	s, err := worktreeSnapshot(top)
+	if err != nil {
+		return []string{"segscan check: " + err.Error()}
+	}
+	finds := ck.run(s)
+	note := ""
+	if ks, why := checkKeystore(top); ks != nil {
+		defer ks.close()
+		ck.known = buildMatcher(ks, ck.chains)
+		finds = append(finds, ck.runKnown(s)...)
+	} else {
+		note = " (known values not checked: " + why + ")"
+	}
+	if len(finds) == 0 {
+		return []string{"segscan check: clean" + note}
+	}
+	out := []string{fmt.Sprintf("segscan check: %d problem(s)%s", len(finds), note)}
+	for _, f := range finds {
+		out = append(out, fmt.Sprintf("  %s:%d  %s  %s", f.File, f.Line, f.Check, f.Msg))
+	}
+	return out
+}
+
+func (a *tuiApp) edit(file string, line int) {
+	ed := os.Getenv("VISUAL")
+	if ed == "" {
+		ed = os.Getenv("EDITOR")
+	}
+	if ed == "" {
+		ed = "vi"
+	}
+	a.t.suspend()
+	argv := strings.Fields(ed)
+	cmd := exec.Command(argv[0], append(argv[1:], fmt.Sprintf("+%d", line), file)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err := cmd.Run()
+	a.t.resume()
+	a.scan()
+	if err != nil {
+		a.s.msg = "editor: " + err.Error()
+	}
+}
+
+func applyLines(r applyResult) []string {
+	var out []string
+	out = append(out, r.Done...)
+	for _, w := range r.Warn {
+		out = append(out, "warning: "+w)
+	}
+	for _, s := range r.Skipped {
+		out = append(out, "not done: "+s)
+	}
+	if len(out) == 0 {
+		out = append(out, "nothing to do")
+	}
+	return out
+}
+
+func printApply(r applyResult, err error) {
+	for _, l := range applyLines(r) {
+		fmt.Println(l)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "segscan:", err)
+	}
+}
+
+// ---------- settings: segscan-tui in the git directory ----------
+
+func tuiParamsPath() string {
+	p, err := gitOut("rev-parse", "--git-path", "segscan-tui")
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+func loadTUIParams() tuiParams {
+	p := tuiParams{previewLines: 3}
+	data, err := os.ReadFile(tuiParamsPath())
+	if err != nil {
+		return p
+	}
+	for _, l := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(l, "=")
+		if !ok {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		switch k {
+		case "paths":
+			p.paths = v
+		case "bpc":
+			p.bpc = v
+		case "minlen":
+			p.minlen = v
+		case "show_allowed":
+			p.showAllowed = v == "yes"
+		case "preview_lines":
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				p.previewLines = n
+			}
+		}
+	}
+	return p
+}
+
+func saveTUIParams(p tuiParams) {
+	path := tuiParamsPath()
+	if path == "" {
+		return
+	}
+	yes := "no"
+	if p.showAllowed {
+		yes = "yes"
+	}
+	data := fmt.Sprintf("# segscan tui settings\npaths = %s\nbpc = %s\nminlen = %s\nshow_allowed = %s\npreview_lines = %d\n",
+		p.paths, p.bpc, p.minlen, yes, p.previewLines)
+	atomicWrite(path, []byte(data), 0o644)
+}

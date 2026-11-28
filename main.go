@@ -28,6 +28,7 @@ const usage = `segscan - statistical secret scanner
                                         fingerprints (everywhere or in some files), files -> allowlist
   segscan ignore [-n] [-history] FILE...
                                         files -> .gitignore, and out of the index
+  segscan tui [-now] [path...]          review the findings in a terminal and mark actions
   segscan scan  [flags] [-scanall] [path...|-]
                                         scan files (in git: tracked and untracked, not
                                         ignored, not .sec/; -scanall: every file)
@@ -185,6 +186,9 @@ func modelPath(v string) string {
 }
 
 func die(err error) {
+	if dieHook != nil {
+		dieHook() // the TUI gives the terminal back first
+	}
 	fmt.Fprintln(os.Stderr, "segscan:", err)
 	os.Exit(2)
 }
@@ -228,6 +232,8 @@ func main() {
 		cmdAllow(args)
 	case "ignore":
 		cmdIgnore(args)
+	case "tui":
+		cmdTUI(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
