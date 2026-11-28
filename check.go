@@ -708,22 +708,31 @@ func relBelowTop(top, p string) (string, bool) {
 // one it says why check 6 is skipped; a keystore that exists but cannot be
 // trusted (modes, owner, a symlink) is an error, not a skip.
 func checkKeystore(top string) (*keystore, string) {
+	ks, why, err := openCheckKeystore(top)
+	if err != nil {
+		die(err) // die gives the terminal back first, in the TUI
+	}
+	return ks, why
+}
+
+// openCheckKeystore is checkKeystore with the error returned: a keystore
+// that is there but cannot be read.
+func openCheckKeystore(top string) (*keystore, string, error) {
 	cfg, err := loadSecConfig(top)
 	if err != nil {
-		return nil, "the working tree's .sec/config is broken"
+		return nil, "the working tree's .sec/config is broken", nil
 	}
 	ks, err := openKeystore(cfg, top, false, false)
 	if err == errNoKeystore {
-		return nil, "no keystore at " + cfg.keystoreDir()
+		return nil, "no keystore at " + cfg.keystoreDir(), nil
 	}
 	if bad, ok := err.(badKeystorePath); ok {
-		return nil, bad.Error()
+		return nil, bad.Error(), nil
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "segscan: keystore:", err)
-		os.Exit(2)
+		return nil, "", fmt.Errorf("keystore: %v", err)
 	}
-	return ks, ""
+	return ks, "", nil
 }
 
 // loadHeadChains reads the files of HEAD, so that the transform chains its
@@ -772,7 +781,10 @@ func checkWorktree(top string) (finds []checkFinding, why string, err error) {
 		return nil, "", err
 	}
 	collect(ck.run(s))
-	ks, why := checkKeystore(top)
+	ks, why, err := openCheckKeystore(top)
+	if err != nil {
+		return nil, "", err // the TUI shows it and goes on
+	}
 	if ks != nil {
 		defer ks.close()
 		cf, err := newCatFile(top)

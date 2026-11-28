@@ -569,7 +569,13 @@ func (a *tuiApp) save() {
 	}
 	lines = append(lines, "")
 	lines = append(lines, a.check()...)
-	a.s.clearMarks()
+	if err == nil {
+		a.s.clearMarks()
+	} else {
+		// Stopped half way: the marks stay for another try (every action
+		// is idempotent); the rescan drops those on files that changed.
+		lines = append(lines, "", "the marks are kept: fix the error and save again")
+	}
 	a.scan()
 	a.s.dialog = &tuiDialog{title: "Saved", lines: lines, keys: "any key", on: func(*tuiState, string) bool { return true }}
 }
