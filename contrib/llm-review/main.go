@@ -4,7 +4,7 @@
 // llama-server for a yes/no answer and prints the same JSON Lines with
 // llm_score added: P(yes) from the first token's probabilities.
 //
-//	segscan scan -json | llm-review > scored.jsonl
+//	segscan scan -json . | llm-review > scored.jsonl
 //	llm-review eval -allow .segscan-allow < scored.jsonl
 package main
 
@@ -26,13 +26,14 @@ import (
 
 const usage = `llm-review: score segscan findings with a local LLM
 
-  segscan scan -json [paths] | llm-review [flags] > scored.jsonl
+  segscan scan -json . | llm-review [flags] > scored.jsonl
   git log -p --all -U0 | segscan diff -json | llm-review [flags]
   llm-review eval -allow FILE < scored.jsonl
 
 Every output line is segscan's JSON object plus "llm_score" (0..1, the
 probability that the finding is a real secret), or "llm_score": null and
 "llm_error". Run it from the directory segscan ran in, or give -C.
+Without paths segscan scans only the files git tracks; "." scans every file.
 
 Flags:
 `

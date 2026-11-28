@@ -13,7 +13,8 @@ No dependencies. The built-in model `base.model` is embedded into the binary.
 
 ## Usage
 
-    segscan scan                             # the whole working tree (git ls-files)
+    segscan scan                             # files tracked by git (git ls-files)
+    segscan scan .                           # every file on disk, untracked and ignored too
     segscan scan conf/ app.yaml              # selected paths
     git log -p --all -U0 | segscan diff      # full history, unique findings
     segscan train                            # repository model -> .git/segscan.model
