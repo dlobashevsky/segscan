@@ -19,9 +19,9 @@ This needs a change to `segscan scan` itself, so that the TUI, `scan` and
 
 | Call | Files |
 |---|---|
-| `segscan scan` in a git repository | tracked and untracked files, without ignored ones (`git ls-files -co --exclude-standard`, the set `check` already uses), without `.sec/` |
+| `segscan scan` in a git repository | tracked and untracked files, without ignored ones (`git ls-files -co --exclude-standard`, the set `check` already uses), without all of `.sec/` |
 | `segscan scan PATH...` in a git repository | the same set, limited to PATH |
-| `segscan scan -raw PATH...`, or outside git | every file under PATH except `.git/` and `node_modules/`: for a directory that is not in git |
+| `segscan scan -scanall PATH...`, or outside git | every file under PATH except `.git/` and `node_modules/`: for a directory that is not in git |
 
 In every mode the allowlist (`path:` lines and fingerprints), the default
 excludes and the limits of `readText` (binary files, files over 8 MiB,
@@ -44,7 +44,13 @@ The launch screen shows the parameters and lets you edit them:
 - LLM: on or off, server address, context settings.
 
 The last used parameters are kept in `.git/segscan-tui` (local, never
-committed).
+committed), together with the display settings:
+
+| Setting | Meaning |
+|---|---|
+| `preview_lines` | lines shown above and below the finding |
+| `preview_width` | how much of a long line is shown; the start of the line is always shown, then the part around the finding |
+| `mask` | how many characters of a value the summary shows (0: none) |
 
 **LLM.** Scoring runs in the background, at about 50 findings a minute on
 the CPU. The list appears at once with bpc only, and the scores fill in as
@@ -66,8 +72,9 @@ are new or whose line changed.
 
 ## 4. Preview
 
-- **Context:** ±N lines around the finding, with the finding highlighted.
-  A long line (base64) is cut around the finding.
+- **Context:** `preview_lines` lines above and below, with the finding
+  highlighted. A long line (base64) shows its start and the part around
+  the finding, up to `preview_width`.
 - **Value boundaries.** A finding is the most random stretch of a string,
   which may be only part of a password: `Summer2026Xk9Pq` can be reported as
   `Xk9Pq`. For action K the boundaries therefore default to the whole value
@@ -85,7 +92,7 @@ most one action.
 | `F` | file → `.sec/allow` (`path:/file`) | `F`, colour 2 | |
 | `A` | fingerprint → `.sec/allow` | `A`, colour 3 | applies to every finding with that fp in the tree; all of them are coloured, and the status line says how many there are and in how many files |
 | `M` | `segscan:allow` in a comment on the line | `M`, colour 3 | the comment syntax comes from the file type (`#`, `//`, `--`, `;`, `<!-- -->`); not offered where there are no comments (JSON) or the type is unknown |
-| `K` | value → keystore, placeholder in the file | `K`, colour 4 | see 5.1 |
+| `K` | value → keystore, placeholder in the file | `K`, colour 4 | only with a keystore on this machine; see 5.1 |
 | `U` | unmark | | |
 | `E` | open in `$EDITOR` at the line | | the file is rescanned on return |
 
@@ -97,26 +104,27 @@ most one action.
 
 ### 5.1 Action K
 
-The user enters the key **name**: it cannot be derived reliably. The TUI
-suggests one from the key on the line, the file and the node, and checks
-it against `.sec/names`. Neither the fp nor anything else computed from
-the value goes into the name: `.sec/names` is committed, and a hash of a
-weak password can be brute-forced.
+K is offered only when the keystore of `.sec/config` exists on this machine
+(it may be empty). Without a keystore only `I`, `F`, `A` and `M` are left:
+no names, no placeholders, no transforms.
 
-It also suggests:
-
-- **scope:** from the path, for example `nodes/n1/etc/nginx/**`;
-- **`-base58`:** if the value looks like one of our generated keys;
-- **transform:** if the value stands inside quotes or a URL. The resulting
-  placeholder is shown before marking.
+- **Name.** The user types it, in the format of `.sec/names` (letters,
+  digits, `_`, `.`); the TUI checks that it is free. The uuid is made by
+  `key add` as usual. Nothing computed from the value goes into the name:
+  `.sec/names` is committed, and a hash of a weak password can be
+  brute-forced.
+- **Scope.** Suggested from the path (`nodes/n1/etc/nginx/**`).
+- **`-base58`.** Suggested if the value looks like one of our generated
+  keys.
+- **Transform.** Offered if the value stands inside quotes or a URL. The
+  resulting placeholder is shown before marking.
 
 | Situation | What K does |
 |---|---|
 | the value is already in the keystore under name N | only puts N's placeholder in; if N's scope does not cover the file, offers to widen it |
-| the name exists with another value | a rotation (the old value goes to `retired`); a separate action with its own confirmation |
 | a new name | `key add` + `key set` + placeholder |
-| no keystore on this machine | warning, and a confirmation for each such action: only the name and the placeholder are written, the value has to be set on the deploy machine with `key set` (until then, `key check` there lists the key as having no value). The value is not kept anywhere else |
-| the value has characters a key cannot hold (space, quotes, `\`, `#`, several lines) | K is not offered; it has to be a secret file (stage 3) |
+| the name exists with another value | not offered: that is a rotation, done by hand (`segscan key set NAME`) |
+| the value has characters a key cannot hold (space, quotes, `\`, `#`, several lines) | not offered; it has to be a secret file (stage 3) |
 
 Keystores on different machines may hold different sets of keys; that is
 accepted.
@@ -132,8 +140,12 @@ accepted.
   at the scan (a hash of the content). The actions on a file that has
   changed are not applied; the file is rescanned and its rows are marked
   again by hand.
+- **Keystore backup.** Before the first write to the keystore in a save,
+  the whole keystore directory is copied next to it as
+  `<keystore>.<YYYYmmdd-HHMMSS>.backup`, with the same modes (0700 for the
+  directory, 0600 for the files). Old backups are removed by hand.
 - **Order of writes.**
-  1. keystore;
+  1. keystore (after the backup);
   2. `.sec/names`;
   3. the files themselves: bottom-up within a file and right to left
      within a line, so that earlier replacements do not move later ones;
@@ -187,18 +199,30 @@ only in memory and never holds values.
    `F`, `A`, `M`, `U`, `E`, saving and the exit dialog; LLM in the
    background.
 2. Testing `key add` / `key set` / `import` / `expand` / `check` by hand
-   on a test repository; then action `K`.
+   on a test repository; then action `K` with the keystore backup.
 3. Secret files: a whole file → keystore `files/<name>` with a type `s`
    manifest entry, for `private_key` findings and multi-line values.
 
+## Decided
+
+1. The flag for scanning everything is `-scanall`; all of `.sec/` is left
+   out of the scan.
+2. `K` is not offered without a keystore.
+3. Key names are typed by the user, in the format of `.sec/names`; the uuid
+   comes from `key add`.
+4. The display of values and context is set in `.git/segscan-tui` (2).
+5. Rotation is done by hand.
+
 ## Open questions
 
-1. The name of the flag for scanning everything (`-raw`?). Is all of
-   `.sec/` left out, or does something there need scanning?
-2. `K` without a keystore: allowed with a warning (as above) or not
-   offered at all?
-3. The rule for suggesting key names.
-4. A TUI on the standard library only (raw terminal mode, ANSI), which
-   keeps segscan free of dependencies, or a TUI library in a separate
-   module.
-5. Masked values in the summary: how many characters to show, if any.
+1. The TUI on the standard library only (raw terminal mode, ANSI escape
+   codes, own list and input widgets) or on a TUI library. segscan is one
+   `package main` with no dependencies. A library would either enter its
+   `go.mod`, or the TUI would have to live in a separate module and run
+   segscan as a command instead of using its code. Proposed: the standard
+   library; the screens needed are few (list, preview, status line, a few
+   dialogs and input fields).
+2. How long to keep keystore backups, or whether to keep only the last N.
+3. The model (`.sec/segscan.model`) can take a key into its dictionary;
+   see the separate issue. Until that is fixed, training on a tree that
+   still holds values is unsafe.
