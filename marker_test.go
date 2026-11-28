@@ -53,6 +53,10 @@ func TestMarkLine(t *testing.T) {
 		{"a.java", "String s = \"\"\"\n  secret\n  \"\"\";\n", 2, ""},                // text block
 		{"a.java", "String s = \\u0022\\u0022\\u0022\n  secret\n  \"\"\";\n", 2, ""}, // the same, escaped
 		{"a.java", "String s = \"x\";\n", 1, "String s = \"x\"; // segscan:allow\n"},
+		{"a.c", "#define VALUE \"x\"??/\n  \"y\"\n", 1, ""},                                            // trigraph continuation
+		{"a.yaml", "? [\"a \\\" x\", \"b \\\\\", \"open\n  password: secret\n  rest\"]\n: v\n", 2, ""}, // flow key, open scalar
+		{"a.yaml", "k: [\"a \\\\\", \"open\n  password: secret\n  rest\"]\n", 2, ""},                   // the same without ?
+		{"a.yaml", "k: [a, b]\nk2: v\n", 2, "k: [a, b]\nk2: v # segscan:allow\n"},
 		{"a.kt", "val s = \"\"\"\nsecret\n\"\"\"\n", 2, ""},
 		{"a.cs", "var s = @\"a\nsecret\";\n", 2, ""},
 		{"a.cpp", "auto s = R\"(a\nsecret)\";\n", 2, ""},

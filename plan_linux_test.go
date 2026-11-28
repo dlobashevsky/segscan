@@ -72,3 +72,23 @@ func TestCLIIgnoreRmRefused(t *testing.T) {
 		t.Errorf("index: %q", out)
 	}
 }
+
+// A symlinked .gitignore (a shared ignore file) is not replaced by a copy.
+func TestCLIIgnoreSymlinkedGitignore(t *testing.T) {
+	r := newRepo(t)
+	shared := filepath.Join(t.TempDir(), "shared-ignore")
+	os.WriteFile(shared, []byte("*.log\n"), 0o644)
+	if err := os.Symlink(shared, filepath.Join(r.dir, ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	r.write("new.txt", "x\n")
+	if _, errs, code := r.run("segscan", "ignore", "new.txt"); code == 0 || !strings.Contains(errs, "regular file") {
+		t.Errorf("exit %d %s", code, errs)
+	}
+	if st, err := os.Lstat(filepath.Join(r.dir, ".gitignore")); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Errorf(".gitignore is no longer a symlink")
+	}
+	if data, _ := os.ReadFile(shared); string(data) != "*.log\n" {
+		t.Errorf("shared file: %q", data)
+	}
+}

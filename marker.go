@@ -25,9 +25,11 @@ type commentStyle struct {
 	rawOpen   []*regexp.Regexp
 	escSingle bool // a backslash may escape inside single quotes too (shell $'...')
 	yaml      bool // YAML: quotes only open a scalar; block and multi-line scalars
-	// Java translates \uXXXX anywhere in the source before it reads a
-	// token: \u0022 is a quote, \u000a a newline. A file with one is refused.
-	unicodeEsc bool
+	// refuse: a file holding any of these is refused whole. Java
+	// translates \uXXXX before it reads a token (\u0022 is a quote,
+	// \u000a a newline); C translates trigraphs (??/ is a backslash, so
+	// "??/" at the end of a line continues it).
+	refuse []string
 }
 
 var (
@@ -40,11 +42,11 @@ var (
 	// C-like languages, each with its multi-line strings: Go raw strings, C++ R"(...)", Rust r#"..."#, the """ text
 	// blocks of Java, Kotlin, Scala, Swift and C# 11, C# @"...".
 	styleGo = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
-	styleC  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
+	styleC  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}, refuse: []string{"??"}}
 	// Rust: ordinary strings may span lines too
 	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
-	styleJava = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}, unicodeEsc: true}
+	styleJava = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}, refuse: []string{`\u`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	styleLua  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
 )
@@ -111,8 +113,10 @@ func markLine(repoPath string, data []byte, no int) ([]byte, error) {
 	if no == 1 && bytes.HasPrefix(body, []byte("#!")) {
 		return nil, fmt.Errorf("%s:1: a #! line: added text would become an argument of the interpreter", repoPath)
 	}
-	if st.unicodeEsc && bytes.Contains(data, []byte(`\u`)) {
-		return nil, fmt.Errorf("%s: the file holds \\u escapes, which Java reads before strings and comments (use the fingerprint)", repoPath)
+	for _, x := range st.refuse {
+		if bytes.Contains(data, []byte(x)) {
+			return nil, fmt.Errorf("%s: the file holds %q, which the compiler translates before it reads strings and comments (use the fingerprint)", repoPath, x)
+		}
 	}
 	if why := unsafeLine(st, lines, no-1); why != "" {
 		return nil, fmt.Errorf("%s:%d: %s", repoPath, no, why)
@@ -306,14 +310,12 @@ func yamlOpensLine(l []byte) string {
 		}
 		val = bytes.TrimSpace(val[sp:])
 	}
-	// An odd number of quotes of either kind anywhere on the line: a
-	// string may run on, whatever comes before it (a tag, an anchor, an
-	// explicit key "? "). A plain "don't" refuses too: in doubt, no.
-	// Double quotes are counted twice, as written and without the ones a
-	// backslash escapes: "first \" x" is even one way and odd the other.
-	if bytes.Count(t, []byte(`"`))%2 != 0 || bytes.Count(t, []byte(`'`))%2 != 0 ||
-		(bytes.Count(t, []byte(`"`))-bytes.Count(t, []byte(`\"`)))%2 != 0 {
-		return "an unbalanced quote: a string may run over lines"
+	// Explicit keys ("? ...") can hold anything over several lines.
+	if t[0] == '?' && (len(t) == 1 || t[1] == ' ' || t[1] == '\t') {
+		return "an explicit YAML key (? ...)"
+	}
+	if why := yamlScanLine(t); why != "" {
+		return why
 	}
 	if len(val) > 0 && (val[0] == '"' || val[0] == '\'') && !yamlQuotedCloses(val) {
 		return "a quoted YAML scalar runs over lines"
@@ -322,6 +324,43 @@ func yamlOpensLine(l []byte) string {
 		if c := yamlCut(val); bytes.Count(c, []byte("[")) != bytes.Count(c, []byte("]")) || bytes.Count(c, []byte("{")) != bytes.Count(c, []byte("}")) {
 			return "a YAML flow collection runs over lines"
 		}
+	}
+	return ""
+}
+
+// yamlScanLine follows quotes and flow brackets along a whole line: a quote
+// opens wherever it stands (a plain "don't" too: in doubt, no), a
+// backslash escapes inside double quotes, a doubled quote inside single
+// ones, and " #" outside them starts a comment. A quote or a bracket still
+// open at the end of the line may run on over the next ones.
+func yamlScanLine(t []byte) string {
+	var q byte
+	depth := 0
+	for k := 0; k < len(t); k++ {
+		c := t[k]
+		switch {
+		case q == '"' && c == '\\':
+			k++
+		case q == '\'' && c == '\'' && k+1 < len(t) && t[k+1] == '\'':
+			k++
+		case q != 0 && c == q:
+			q = 0
+		case q != 0:
+		case c == '#' && (k == 0 || t[k-1] == ' ' || t[k-1] == '\t'):
+			k = len(t)
+		case c == '"' || c == '\'':
+			q = c
+		case c == '[' || c == '{':
+			depth++
+		case c == ']' || c == '}':
+			depth--
+		}
+	}
+	switch {
+	case q != 0:
+		return "an unbalanced quote: a string may run over lines"
+	case depth != 0:
+		return "a YAML flow collection runs over lines"
 	}
 	return ""
 }

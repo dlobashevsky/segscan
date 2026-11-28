@@ -222,6 +222,9 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 			if err := repoDir(p.top, filepath.Dir(w.path)); err != nil {
 				return r, err
 			}
+			if err := regularOrAbsent(w.path); err != nil {
+				return r, err
+			}
 		}
 		added, err := appendLines(w.path, w.lines, w.present, dry)
 		if err != nil {
@@ -243,8 +246,8 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 			return r, err
 		}
 		// What can be seen before: a .gitignore that is no regular file.
-		if st, err := os.Lstat(gitignore); err == nil && !st.Mode().IsRegular() {
-			return r, fmt.Errorf("%s: not a regular file; nothing removed from the index", gitignore)
+		if err := regularOrAbsent(gitignore); err != nil {
+			return r, fmt.Errorf("%v; nothing removed from the index", err)
 		}
 	}
 	for _, a := range untrack {
@@ -332,6 +335,17 @@ func (p *plan) inManifest(f string) bool {
 		}
 	}
 	return false
+}
+
+// regularOrAbsent refuses a file to be appended to that is a symlink, a
+// directory or anything else but a regular file: the write would replace
+// a symlink by a copy of its target, or fail half way.
+func regularOrAbsent(path string) error {
+	st, err := os.Lstat(path)
+	if err == nil && !st.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file (%v); edit it by hand", path, st.Mode().Type())
+	}
+	return nil
 }
 
 // appendLines adds the lines not yet present to the file (creating it),
