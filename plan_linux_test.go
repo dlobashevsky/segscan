@@ -47,3 +47,23 @@ func TestCLIAllowSymlinkedDirs(t *testing.T) {
 		t.Errorf("marked a file outside the repository: %q", data)
 	}
 }
+
+// When git rm --cached refuses (here: a file outside the sparse-checkout
+// cone), .gitignore stays as it was.
+func TestCLIIgnoreRmRefused(t *testing.T) {
+	r := newRepo(t)
+	r.write("in/a.txt", "a\n")
+	r.write("out/b.txt", "b\n")
+	r.must("git", "add", "-A")
+	r.must("git", "commit", "-q", "-m", "c")
+	if _, _, code := r.run("git", "sparse-checkout", "set", "--cone", "in"); code != 0 {
+		t.Skip("no sparse-checkout")
+	}
+	_, errs, code := r.run("segscan", "ignore", "-history", "out/b.txt")
+	if code == 0 {
+		t.Skip("git rm --cached accepted a file outside the cone here")
+	}
+	if data, err := os.ReadFile(filepath.Join(r.dir, ".gitignore")); err == nil && strings.Contains(string(data), "b.txt") {
+		t.Errorf(".gitignore written although git rm failed: %s", errs)
+	}
+}

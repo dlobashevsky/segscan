@@ -57,8 +57,8 @@ type applyResult struct {
 }
 
 // apply carries the plan out, or only reports it when dry. Writes go
-// through a temporary file and a rename. Order (docs/tui.md 6): the files
-// themselves, then the allowlist and .gitignore, then git rm --cached. On
+// through a temporary file and a rename. Order: the files themselves,
+// then git rm --cached, then the allowlist and .gitignore. On
 // an error it stops; every action is idempotent, so applying again is safe.
 func (p *plan) apply(dry bool) (applyResult, error) {
 	var r applyResult
@@ -196,6 +196,19 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 			}
 		}
 	}
+	// Out of the index first: git rm --cached may refuse (a sparse
+	// checkout cone, a lock), and then .gitignore must not have changed
+	// either. The other way round a failure leaves the rule without the
+	// untracking.
+	for _, a := range untrack {
+		if !dry {
+			cmd := exec.Command("git", "-C", p.top, "--literal-pathspecs", "rm", "--cached", "-q", "--", a.File)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return r, fmt.Errorf("git rm --cached %s: %v %s", a.File, err, bytes.TrimSpace(out))
+			}
+		}
+		r.Done = append(r.Done, fmt.Sprintf("%s: %s from the index (the file stays on disk)", a.File, verb("removed", "would be removed")))
+	}
 	allowRel := p.allowPath
 	if rel, err := filepath.Rel(p.top, p.allowPath); err == nil && !strings.HasPrefix(rel, "..") {
 		allowRel = rel
@@ -224,16 +237,6 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 		}
 	}
 
-	// 3. Out of the index.
-	for _, a := range untrack {
-		if !dry {
-			cmd := exec.Command("git", "-C", p.top, "--literal-pathspecs", "rm", "--cached", "-q", "--", a.File)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return r, fmt.Errorf("git rm --cached %s: %v %s", a.File, err, bytes.TrimSpace(out))
-			}
-		}
-		r.Done = append(r.Done, fmt.Sprintf("%s: %s from the index (the file stays on disk)", a.File, verb("removed", "would be removed")))
-	}
 	return r, nil
 }
 
