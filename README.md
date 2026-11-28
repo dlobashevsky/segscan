@@ -122,7 +122,7 @@ Safeguards:
   findings of at least N bits per char. Entries of `-words` lists that the
   built-in model reports are left out as well.
 - `segscan model check`: the dictionary words of length 6 and more that
-  look random under the built-in model (above 4.0 bits per letter, `-maxbpc`),
+  look random under the built-in model (above 5.0 bits per letter, `-maxbpc`),
   and, with the keystore, the words that are letter fragments of a value.
   Exit 1 if there are any. A harmless word is accepted with a `word:<word>`
   line in the allowlist. `-since REV` also lists the words added since the

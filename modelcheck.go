@@ -33,7 +33,10 @@ type modelCheckOpts struct {
 
 const (
 	modelCheckMinLen = dictGuardLen
-	modelCheckMaxBpc = 4.0
+	// Real names and glued words of configuration repositories reach about
+	// 4.8 bits per letter (vikiaplus, kaufmann, icmpprobe); random letter
+	// strings start at about 5.5.
+	modelCheckMaxBpc = 5.0
 )
 
 // checkModel returns the suspicious words of m: random-looking (kind
