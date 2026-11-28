@@ -8,9 +8,13 @@ not a filter in the hooks: run it yourself, on demand.
 
 llm-review scores whatever segscan prints, so the paths decide what gets
 reviewed. Without paths, `segscan scan` reads only the files git tracks
-(`git ls-files`). With `.` it reads every file on disk, including files not
-yet added and ignored ones; only `.git` and `node_modules` are skipped. On a
-tree with new, uncommitted files the two can differ a lot. A threshold in
+(`git ls-files`). With `.` it walks the directory, so files not yet added
+and ignored ones are read too; it does not descend into `.git` and
+`node_modules`. On a tree with new, uncommitted files the two can differ a
+lot. Either way segscan's own exclusions still apply: `path:` lines of the
+allowlist, lock files, `*.min.js`, `*.map`, binary files, files over 8 MiB
+and anything that is not a regular file (see "False positives" and "What it
+does not see" in the [segscan README](../../README.md)). A threshold in
 `.sec/config` (`scan_bpc`) applies too; `-bpc 0` lifts it.
 
 Every output line is segscan's JSON object plus `llm_score`: the probability,
