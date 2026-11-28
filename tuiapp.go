@@ -1,14 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // segscan tui: the terminal side. The state and the keys are in tui.go.
@@ -17,7 +18,7 @@ import (
 var dieHook func()
 
 type tuiParams struct {
-	paths        string
+	paths        string // as typed: split by splitPaths, quoted by quotePaths
 	bpc, minlen  string
 	showAllowed  bool
 	previewLines int
@@ -39,7 +40,7 @@ func cmdTUI(args []string) {
 	m := mustModel(c) // before the screen: it may print a note
 	p := loadTUIParams()
 	if fs.NArg() > 0 {
-		p.paths = strings.Join(fs.Args(), " ")
+		p.paths = quotePaths(fs.Args())
 	}
 	if c.set["bpc"] || (p.bpc == "" && c.o.MinBpc > 0) {
 		p.bpc = strconv.FormatFloat(c.o.MinBpc, 'f', -1, 64)
@@ -73,6 +74,9 @@ type tty struct {
 	keys  chan string
 	winch chan os.Signal
 	done  bool
+	// The reader stops while the editor has the terminal: suspend sends
+	// on pause and waits for paused; resume sends on resumed.
+	pause, paused, resumed chan struct{}
 }
 
 func openTTY() (*tty, error) {
@@ -80,7 +84,8 @@ func openTTY() (*tty, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tui: %v", err)
 	}
-	t := &tty{old: old, keys: make(chan string, 64), winch: make(chan os.Signal, 1)}
+	t := &tty{old: old, keys: make(chan string, 256), winch: make(chan os.Signal, 1),
+		pause: make(chan struct{}), paused: make(chan struct{}), resumed: make(chan struct{})}
 	if sig := winchSignal(); sig != nil {
 		signal.Notify(t.winch, sig)
 	}
@@ -98,8 +103,12 @@ func (t *tty) close() {
 	restoreTerm(0, t.old)
 }
 
-// suspend gives the terminal back (for the editor); resume takes it again.
+// suspend gives the terminal back (for the editor): the reader stops
+// first, so no key typed in the editor reaches the TUI. resume takes the
+// terminal again and restarts the reader.
 func (t *tty) suspend() {
+	t.pause <- struct{}{}
+	<-t.paused
 	os.Stdout.WriteString("\x1b[0m\x1b[?25h\x1b[?1049l")
 	restoreTerm(0, t.old)
 }
@@ -107,20 +116,38 @@ func (t *tty) suspend() {
 func (t *tty) resume() {
 	makeRaw(0)
 	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l")
+	t.resumed <- struct{}{}
 }
 
-// read turns the bytes of stdin into key names.
+// read turns the bytes of stdin into key names. A read returns after
+// 0.1 s without input (VTIME), so the loop sees a pause request soon, and
+// a key cut between two reads (ESC [ A, a UTF-8 character) is kept until
+// the rest comes; what is still pending after a quiet read is final.
 func (t *tty) read() {
-	r := bufio.NewReader(os.Stdin)
 	buf := make([]byte, 64)
+	var pending []byte
 	for {
-		n, err := r.Read(buf)
-		if err != nil {
+		select {
+		case <-t.pause:
+			pending = nil
+			t.paused <- struct{}{}
+			<-t.resumed
+			continue
+		default:
+		}
+		n, err := os.Stdin.Read(buf)
+		if n == 0 && err != nil && err != io.EOF {
 			close(t.keys)
 			return
 		}
-		for _, k := range decodeKeys(buf[:n]) {
-			t.keys <- k
+		pending = append(pending, buf[:n]...)
+		keys, rest := decodeKeysPartial(pending, n == 0)
+		pending = append(pending[:0], rest...)
+		for _, k := range keys {
+			select {
+			case t.keys <- k:
+			default: // 256 keys behind: drop
+			}
 		}
 	}
 }
@@ -134,11 +161,24 @@ var escKeys = map[string]string{
 	"\x1b[3~": "delete",
 }
 
-// decodeKeys splits one read of the terminal into keys. A lone ESC (no
-// sequence after it in the same read) is "esc".
+// decodeKeys splits the bytes of the terminal into keys, all of them: a
+// lone ESC is "esc".
 func decodeKeys(b []byte) []string {
-	var out []string
+	k, _ := decodeKeysPartial(b, true)
+	return k
+}
+
+// decodeKeysPartial is decodeKeys for input that may go on: unless final,
+// an ESC that may start a sequence not complete yet, or the first bytes of
+// a UTF-8 character, are left in rest.
+func decodeKeysPartial(b []byte, final bool) (out []string, rest []byte) {
 	for len(b) > 0 {
+		if !final && escPrefix(b) {
+			return out, b
+		}
+		if !final && b[0] >= 0x80 && !utf8.FullRune(b) {
+			return out, b
+		}
 		if b[0] == 0x1b {
 			matched := false
 			for seq, name := range escKeys {
@@ -188,7 +228,27 @@ func decodeKeys(b []byte) []string {
 		}
 		b = b[1:]
 	}
-	return out
+	return out, nil
+}
+
+// escPrefix reports b starting with an escape sequence not complete yet:
+// ESC alone, ESC [ or ESC O, or a CSI without its final byte.
+func escPrefix(b []byte) bool {
+	if b[0] != 0x1b {
+		return false
+	}
+	if len(b) == 1 {
+		return true
+	}
+	if b[1] != '[' && b[1] != 'O' {
+		return false
+	}
+	for k := 2; k < len(b); k++ {
+		if b[k] >= 0x40 && b[k] <= 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *tty) draw(lines []string) {
@@ -233,7 +293,7 @@ func (t *tty) launch(p tuiParams) (tuiParams, bool) {
 	}
 	pl := strconv.Itoa(p.previewLines)
 	fields := []field{
-		{"paths", &p.paths, nil, "files and directories; empty: what git would commit"},
+		{"paths", &p.paths, nil, `files and directories; "a b" or a\ b for a name with a space; empty: what git would commit`},
 		{"bpc", &p.bpc, nil, "report only findings of at least N bits per char; empty: none"},
 		{"minlen", &p.minlen, nil, "minimum length of a finding; empty: the default"},
 		{"show allowed", nil, &p.showAllowed, "also list findings whose fp is in the allowlist, dimmed"},
@@ -257,9 +317,9 @@ func (t *tty) launch(p tuiParams) (tuiParams, bool) {
 			if editing && i == cur {
 				v += "█"
 			}
-			l := fmt.Sprintf("  %-14s %s", f.name, v)
+			l := fit(fmt.Sprintf("  %-14s %s", f.name, v), w)
 			if i == cur {
-				l = ansiReverse + fit(l, w) + ansiReset
+				l = ansiReverse + l + ansiReset
 			}
 			lines = append(lines, l)
 		}
@@ -396,7 +456,7 @@ func (a *tuiApp) scan() {
 	var rows []*tuiRow
 	hashes := map[string]string{}
 	sc := &fileScan{sc: NewScanner(a.m, o), allow: scanAllow}
-	for _, f := range scanFiles(strings.Fields(a.p.paths), false) {
+	for _, f := range scanFiles(splitPaths(a.p.paths), false) {
 		rp := repoPath(f)
 		if allow.skipPath(rp) {
 			continue
@@ -575,7 +635,7 @@ func applyLines(r applyResult) []string {
 
 func printApply(r applyResult, err error) {
 	for _, l := range applyLines(r) {
-		fmt.Println(l)
+		fmt.Println(show(l)) // file names may hold control characters
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "segscan:", err)
@@ -634,4 +694,52 @@ func saveTUIParams(p tuiParams) {
 	data := fmt.Sprintf("# segscan tui settings\npaths = %s\nbpc = %s\nminlen = %s\nshow_allowed = %s\npreview_lines = %d\n",
 		p.paths, p.bpc, p.minlen, yes, p.previewLines)
 	atomicWrite(path, []byte(data), 0o644)
+}
+
+// splitPaths splits the paths field at white space; "..." and a backslash
+// keep a space (or a quote) in a name.
+func splitPaths(s string) []string {
+	var out []string
+	var cur strings.Builder
+	in, quoted := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' && i+1 < len(s):
+			i++
+			cur.WriteByte(s[i])
+			in = true
+		case c == '"':
+			quoted, in = !quoted, true
+		case (c == ' ' || c == '\t') && !quoted:
+			if in {
+				out = append(out, cur.String())
+				cur.Reset()
+				in = false
+			}
+		default:
+			cur.WriteByte(c)
+			in = true
+		}
+	}
+	if in {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// quotePaths is the inverse of splitPaths.
+func quotePaths(ps []string) string {
+	q := make([]string, len(ps))
+	for i, p := range ps {
+		var b strings.Builder
+		for _, c := range []byte(p) {
+			if c == ' ' || c == '\t' || c == '"' || c == '\\' {
+				b.WriteByte('\\')
+			}
+			b.WriteByte(c)
+		}
+		q[i] = b.String()
+	}
+	return strings.Join(q, " ")
 }

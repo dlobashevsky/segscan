@@ -277,3 +277,73 @@ func TestDecodeKeys(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A key cut between two reads is decoded when the rest comes; a lone ESC
+// at the end of input is "esc".
+func TestDecodeKeysAcrossReads(t *testing.T) {
+	var got []string
+	var pending []byte
+	for _, chunk := range []string{"j\x1b", "[", "A\xc3", "\xa9", "\x1b", ""} {
+		pending = append(pending, chunk...)
+		k, rest := decodeKeysPartial(pending, chunk == "")
+		got = append(got, k...)
+		pending = append(pending[:0], rest...)
+	}
+	if want := "j,up,é,esc"; strings.Join(got, ",") != want {
+		t.Errorf("got %q, want %s", got, want)
+	}
+}
+
+// Control characters of a file name never reach the terminal.
+func TestTUIFileNameEscaped(t *testing.T) {
+	rows := testRows()
+	rows[0].file, rows[0].f.File = "evil\x1b]0;pwned\x07\x1b[2J.yaml", "evil"
+	s := newTUIState(rows)
+	s.w, s.h = 100, 20
+	for _, l := range s.render() {
+		if strings.Contains(ansiRE.ReplaceAllString(l, ""), "\x1b") || strings.ContainsAny(ansiRE.ReplaceAllString(l, ""), "\x07") {
+			t.Fatalf("a control character reached the screen: %q", l)
+		}
+	}
+	s.fileMark[rows[0].file] = actIgnore
+	if sum := strings.Join(s.summary(), ""); !strings.Contains(sum, "evil") {
+		t.Fatalf("summary: %q", sum)
+	}
+	s.dialog = &tuiDialog{title: "t", lines: s.summary(), keys: "k", on: func(*tuiState, string) bool { return true }}
+	for _, l := range s.render() {
+		if strings.ContainsAny(ansiRE.ReplaceAllString(l, ""), "\x1b\x07") {
+			t.Fatalf("a control character in the dialog: %q", l)
+		}
+	}
+}
+
+// F is refused on any row of a file that holds a private key, folded too.
+func TestTUIFileWithPrivateKey(t *testing.T) {
+	rows := testRows()
+	pem := &tuiRow{f: Finding{File: "b.yaml", Line: 5, Col: 1, Text: "-----BEGIN PRIVATE KEY-----", Kind: kindPEM, Label: "-----BEGIN PRIVATE KEY-----"}, file: "b.yaml"}
+	pem.fp = pem.f.FP()
+	s := newTUIState(append(rows, pem))
+	keys(s, "home", "down", "down") // b.yaml, the entropy row
+	if _, r := s.current(); r == nil || r.f.Kind == kindPEM || r.file != "b.yaml" {
+		t.Fatalf("not on the entropy row of b.yaml: %+v", r)
+	}
+	keys(s, "F")
+	if s.fileMark["b.yaml"] != 0 || !strings.Contains(s.msg, "private key") {
+		t.Errorf("F on a file with a private key: %q", s.msg)
+	}
+	keys(s, "z", "F") // folded
+	if s.fileMark["b.yaml"] != 0 {
+		t.Errorf("F on the folded row of a file with a private key")
+	}
+}
+
+func TestSplitPaths(t *testing.T) {
+	in := []string{"dir with spaces", `a"b`, `c\d`, "plain"}
+	q := quotePaths(in)
+	if got := splitPaths(q); strings.Join(got, "|") != strings.Join(in, "|") {
+		t.Errorf("round trip %q -> %q -> %q", in, q, got)
+	}
+	if got := splitPaths(`"x y" z\ w  v`); strings.Join(got, "|") != "x y|z w|v" {
+		t.Errorf("typed: %q", got)
+	}
+}

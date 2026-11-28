@@ -31,8 +31,10 @@ func makeRaw(fd int) (*termState, error) {
 	t.Oflag &^= syscall.OPOST
 	t.Cflag |= syscall.CS8
 	t.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.IEXTEN | syscall.ISIG
-	t.Cc[syscall.VMIN] = 1
-	t.Cc[syscall.VTIME] = 0
+	// A read returns after 0.1 s without input: the reader can stop for
+	// the editor, and tell a lone ESC from the start of a sequence.
+	t.Cc[syscall.VMIN] = 0
+	t.Cc[syscall.VTIME] = 1
 	if err := ttyIoctl(fd, syscall.TCSETS, unsafe.Pointer(&t)); err != nil {
 		return nil, err
 	}

@@ -239,6 +239,16 @@ func (s *tuiState) current() (viewItem, *tuiRow) {
 	return it, s.rows[it.row]
 }
 
+// hasPEM reports a private key finding anywhere in the file.
+func (s *tuiState) hasPEM(file string) bool {
+	for _, r := range s.rows {
+		if r.file == file && r.f.Kind == kindPEM {
+			return true
+		}
+	}
+	return false
+}
+
 // fpSpread counts the findings and files that share a fingerprint.
 func (s *tuiState) fpSpread(fp string) (n, files int) {
 	seen := map[string]bool{}
@@ -298,8 +308,8 @@ func (s *tuiState) key(k string) {
 			return
 		}
 		kind := actKind(k[0])
-		if kind == actAllowFile && r != nil && r.f.Kind == kindPEM {
-			s.msg = "F is not offered for a private key: check does not honour path: lines for private keys"
+		if kind == actAllowFile && s.hasPEM(it.file) {
+			s.msg = "F is not offered for a file with a private key: path: would hide it from the scan (a: the fp in this file)"
 			return
 		}
 		if kind == actAllowFile {
@@ -508,11 +518,14 @@ var markColour = map[actKind]string{
 	actAllowFPHere: "\x1b[36m",
 }
 
-// fit cuts or pads s to n columns (one rune, one column).
+// fit cuts or pads s to n columns (one rune, one column). Control
+// characters become "·": everything shown goes through fit or show, and a
+// file name can hold ESC.
 func fit(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
+	s = show(s)
 	if c := utf8.RuneCountInString(s); c <= n {
 		return s + strings.Repeat(" ", n-c)
 	}
@@ -530,7 +543,7 @@ func show(s string) string {
 		switch {
 		case c == '\t':
 			b.WriteString(" ")
-		case c < 0x20 || c == 0x7f || c == utf8.RuneError:
+		case c < 0x20 || (c >= 0x7f && c < 0xa0) || c == utf8.RuneError:
 			b.WriteString("·")
 		default:
 			b.WriteRune(c)
