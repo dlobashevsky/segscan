@@ -334,7 +334,8 @@ func (t *trainer) addFile(data []byte) {
 	}
 }
 
-// addWords adds a ready-made word list (one word per line, a-z).
+// addWords adds a ready-made word list (one word per line, a-z). With
+// -guard a word the built-in model reports is left out too.
 func (t *trainer) addWords(data []byte) {
 	for _, w := range bytes.Fields(bytes.ToLower(data)) {
 		ok := len(w) >= 2 && len(w) <= maxWordLen
@@ -343,6 +344,12 @@ func (t *trainer) addWords(data []byte) {
 		}
 		if !ok {
 			continue
+		}
+		if t.guard != nil {
+			if t.guard.line(w); len(t.guard.spans) > 0 {
+				t.guard.listDropped++
+				continue
+			}
 		}
 		st := t.frag[string(w)]
 		if st == nil {
@@ -364,6 +371,7 @@ type trainGuardScan struct {
 	spans [][2]int // the findings on the current line
 
 	findings, allowed, dropped int
+	listDropped                int // -words entries left out
 }
 
 func (g *trainGuardScan) line(s []byte) {

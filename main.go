@@ -401,6 +401,9 @@ func cmdTrain(args []string) {
 	if g != nil {
 		fmt.Fprintf(os.Stderr, "segscan: train -guard: %d findings of the built-in model, %d of them allowed; %d fragments left out\n",
 			g.findings, g.allowed, g.dropped)
+		if g.listDropped > 0 {
+			fmt.Fprintf(os.Stderr, "segscan: train -guard: %d word-list entries look random and were left out\n", g.listDropped)
+		}
 	}
 }
 

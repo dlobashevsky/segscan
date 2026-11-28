@@ -211,9 +211,16 @@ func (c *common) hookModelCheck() {
 	if o.Allow == nil {
 		o.Allow = loadAllow(c.allow, false)
 	}
-	if ks, _ := checkKeystore(c.top); ks != nil {
+	// The keystore of the staged config, the snapshot being committed.
+	ks, err := openKeystore(c.sec, c.top, false, false)
+	switch _, bad := err.(badKeystorePath); {
+	case err == nil:
 		defer ks.close()
 		o.KS = ks
+	case err == errNoKeystore || bad:
+		fmt.Fprintln(os.Stderr, "segscan: hook_model: keystore values not checked: no usable keystore for the staged config")
+	default:
+		die(err)
 	}
 	var bad []modelIssue
 	for _, x := range checkModel(m, o) {

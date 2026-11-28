@@ -158,3 +158,56 @@ func TestCLIHookModel(t *testing.T) {
 		r.write(".sec/config", strings.Replace(r.read(".sec/config"), "hook_model = "+mode+"\n", "", 1))
 	}
 }
+
+// -words entries go through the guard too.
+func TestCLITrainGuardWordList(t *testing.T) {
+	r := newRepo(t)
+	r.write("README.txt", strings.Repeat("the server listens on the port given in the configuration file\n", 20))
+	r.write("words.txt", "transliteration\n"+spoilKey+"\n")
+	r.must("git", "add", "README.txt")
+	r.must("segscan", "train", "-words", "words.txt")
+	if _, _, code := r.run("segscan", "model", "check"); code != 1 {
+		t.Errorf("a random list word without -guard should be in the model")
+	}
+	_, errs, _ := r.run("segscan", "train", "-guard", "-words", "words.txt")
+	if !strings.Contains(errs, "word-list entries") {
+		t.Errorf("train -guard -words: %s", errs)
+	}
+	if out, _, code := r.run("segscan", "model", "check"); code != 0 {
+		t.Errorf("guarded list: exit %d\n%s", code, out)
+	}
+}
+
+// The hook takes the keystore from the staged config, not the working tree's.
+func TestCLIHookModelStagedKeystore(t *testing.T) {
+	r, ks := newKSRepo(t)
+	const word = "correcthorsebattery" // a word, not random: only the keystore check finds it
+	r.setKey("a", "Correcthorsebattery7")
+	for _, n := range []string{"n1", "n2", "n3"} {
+		r.write("conf/"+n+".conf", "pass = "+word+"\n")
+	}
+	r.write("README.txt", strings.Repeat("the server listens on the port given in the configuration file\n", 20))
+	r.must("git", "add", "-A")
+	r.must("segscan", "train")
+	withKeystore := func(path string) string {
+		lines := strings.Split(r.read(".sec/config"), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, "keystore") {
+				lines[i] = "keystore = " + path
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	cfg := withKeystore(ks) + "hook_model = block\n"
+	r.write(".sec/config", cfg)
+	r.must("git", "add", "-A")
+	// The working tree's config points elsewhere, unstaged.
+	r.write(".sec/config", withKeystore(filepath.Join(t.TempDir(), "none")))
+	env := r.env
+	defer func() { r.env = env }()
+	r.env = append(append([]string{}, env...), "SEGSCAN_KEYSTORE=")
+	_, errs, code := r.run("segscan", "hook")
+	if code != 1 || !strings.Contains(errs, "value of a") {
+		t.Errorf("staged keystore: exit %d\n%s", code, errs)
+	}
+}
