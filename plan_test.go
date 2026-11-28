@@ -36,6 +36,14 @@ func TestCLIAllowCommands(t *testing.T) {
 	if strings.Count(allow, "abcdef012345") != 1 || !strings.Contains(allow, `path:/we\*ird.txt`) {
 		t.Errorf(".segscan-allow:\n%s", allow)
 	}
+	// path: lines keep their case: Foo.txt is not foo.txt.
+	r.write("Foo.txt", "x\n")
+	r.write("foo.txt", "x\n")
+	r.must("segscan", "allow", "path", "Foo.txt")
+	r.must("segscan", "allow", "path", "foo.txt")
+	if allow := r.read(".segscan-allow"); !strings.Contains(allow, "path:/Foo.txt") || !strings.Contains(allow, "path:/foo.txt") {
+		t.Errorf("case of path: lines:\n%s", allow)
+	}
 	if _, _, code := r.run("segscan", "allow", "fp", "nothex"); code != 2 {
 		t.Errorf("a bad fingerprint should be refused")
 	}

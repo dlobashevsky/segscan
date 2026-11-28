@@ -75,11 +75,24 @@ func newPlan(c *common) *plan {
 	if top == "" {
 		die(fmt.Errorf("not a git repository"))
 	}
-	allow, err := filepath.Abs(c.allow)
-	if err != nil {
-		die(err)
+	return &plan{top: top, allowPath: allowFilePath(c.allow)}
+}
+
+// allowFilePath makes the allowlist path absolute without resolving
+// symlinks on the way, so that repoDir can refuse a symlinked .sec/.
+func allowFilePath(p string) string {
+	if !filepath.IsAbs(p) {
+		return filepath.Join(repoCwd(), p)
 	}
-	return &plan{top: top, allowPath: allow}
+	p = filepath.Clean(p)
+	// .sec/allow comes as <git toplevel>/.sec/allow; give it the canonical
+	// top the plan uses, so that the part below it is what repoDir checks.
+	if raw, err := gitOut("rev-parse", "--show-toplevel"); err == nil && raw != "" {
+		if rest, ok := strings.CutPrefix(p, filepath.Clean(raw)+string(filepath.Separator)); ok {
+			return filepath.Join(repoTop(), rest)
+		}
+	}
+	return p
 }
 
 // mustRepoFile gives a command-line path as a repository path; it must lie

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -19,6 +20,9 @@ type commentStyle struct {
 	// multi-line constructs: if one opens before the line and may still be
 	// open, the marker is refused
 	blockOpen []string
+	// rawOpen: the same for constructs that need a pattern (a raw string
+	// prefix must start a token: r"..." yes, "user" no)
+	rawOpen   []*regexp.Regexp
 	spanLines bool // quoted strings may continue on the next line (shell, SQL)
 	yaml      bool // YAML: quotes only open a scalar; block and multi-line scalars
 	xml       bool
@@ -30,10 +34,18 @@ var (
 	stylePy    = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleTOML  = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleYAML  = commentStyle{start: "#", quotes: `"'`, yaml: true}
-	styleSlash = commentStyle{start: "//", quotes: "\"'`", blockOpen: []string{"/*", "`", `R"`}}
-	styleSQL   = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*", "$$"}, spanLines: true}
-	styleLua   = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
-	styleXML   = commentStyle{start: "<!--", end: "-->", xml: true}
+	// C-like languages, each with its multi-line strings: Go and JS raw
+	// and template strings, C++ R"(...)", Rust r#"..."#, the """ text
+	// blocks of Java, Kotlin, Scala, Swift and C# 11, C# @"...".
+	styleGo   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
+	styleJS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
+	styleC    = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
+	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])b?r#*"`)}}
+	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
+	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@"|"@`)}}
+	styleSQL  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*", "$$"}, spanLines: true}
+	styleLua  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
+	styleXML  = commentStyle{start: "<!--", end: "-->", xml: true}
 )
 
 // styleFor returns the comment style of a repository path, false for a type
@@ -51,8 +63,18 @@ func styleFor(p string) (commentStyle, bool) {
 		return styleYAML, true
 	case ".toml":
 		return styleTOML, true
-	case ".go", ".js", ".mjs", ".ts", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".rs", ".swift", ".kt", ".scala", ".cs":
-		return styleSlash, true
+	case ".go":
+		return styleGo, true
+	case ".js", ".mjs", ".ts":
+		return styleJS, true
+	case ".c", ".h", ".cc", ".cpp", ".hpp":
+		return styleC, true
+	case ".rs":
+		return styleRust, true
+	case ".java", ".kt", ".scala", ".swift":
+		return styleJVM, true
+	case ".cs":
+		return styleCS, true
 	case ".sql":
 		return styleSQL, true
 	case ".lua":
@@ -128,6 +150,13 @@ func unsafeLine(st commentStyle, lines [][]byte, i int) string {
 		for k := 0; k <= i; k++ {
 			if bytes.Contains(lines[k], []byte(open)) {
 				return fmt.Sprintf("a multi-line construct (%s) at or before the line", open)
+			}
+		}
+	}
+	for _, re := range st.rawOpen {
+		for k := 0; k <= i; k++ {
+			if re.Match(lines[k]) {
+				return "a raw or multi-line string at or before the line"
 			}
 		}
 	}

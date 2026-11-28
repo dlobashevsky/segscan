@@ -100,6 +100,10 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 	}
 	for _, f := range sortedKeys(byFile) {
 		full := filepath.Join(p.top, f)
+		if err := repoDir(p.top, filepath.Dir(full)); err != nil {
+			r.Skipped = append(r.Skipped, f+": "+err.Error())
+			continue
+		}
 		st, err := os.Lstat(full)
 		if err != nil {
 			return r, err
@@ -192,6 +196,13 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 		{p.allowPath, allowRel, allowLines, allowHas},
 		{filepath.Join(p.top, ".gitignore"), ".gitignore", ignoreLines, lineHas},
 	} {
+		if len(w.lines) > 0 {
+			// A directory of the checkout may be a symlink (.sec itself):
+			// never write through one, as the other .sec/ writers.
+			if err := repoDir(p.top, filepath.Dir(w.path)); err != nil {
+				return r, err
+			}
+		}
 		added, err := appendLines(w.path, w.lines, w.present, dry)
 		if err != nil {
 			return r, err
@@ -277,8 +288,10 @@ func lineHas(data []byte, line string) bool {
 	return false
 }
 
-// allowHas compares the entry (fp or path:glob) of each allowlist line,
-// without comments.
+// allowHas compares the entry (fp, word: or path:glob) of each allowlist
+// line, without comments. Fingerprints and words are compared as the
+// allowlist reads them, in lower case; path: globs as written, since paths
+// are matched with their case.
 func allowHas(data []byte, line string) bool {
 	entry := func(l string) string {
 		if i := strings.IndexByte(l, '#'); i >= 0 {
@@ -287,6 +300,9 @@ func allowHas(data []byte, line string) bool {
 		f := strings.Fields(l)
 		if len(f) == 0 {
 			return ""
+		}
+		if strings.HasPrefix(f[0], "path:") {
+			return f[0]
 		}
 		return strings.ToLower(f[0])
 	}
