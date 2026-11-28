@@ -444,3 +444,15 @@ func TestDecodeKeysInvalidUTF8(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// The paths field survives segscan-tui: a name ending in a space too.
+func TestTUIParamsRoundTrip(t *testing.T) {
+	in := tuiParams{paths: quotePaths([]string{"name ", " lead", "a b"}), bpc: "4.5", minlen: "12", showAllowed: true, previewLines: 5}
+	out := parseTUIParams([]byte(encodeTUIParams(in)))
+	if out != in {
+		t.Errorf("got %+v, want %+v", out, in)
+	}
+	if got := splitPaths(out.paths); strings.Join(got, "|") != "name | lead|a b" {
+		t.Errorf("paths %q", got)
+	}
+}

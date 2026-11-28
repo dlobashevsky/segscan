@@ -616,6 +616,11 @@ func (a *tuiApp) edit(file string, line int) {
 	}
 	a.t.suspend()
 	argv := strings.Fields(ed)
+	// "./" before a relative name: a file named -Ssession.vim must not
+	// be an option of the editor (not every editor knows "--")
+	if !filepath.IsAbs(file) {
+		file = "./" + file
+	}
 	cmd := exec.Command(argv[0], append(argv[1:], fmt.Sprintf("+%d", line), file)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err := cmd.Run()
@@ -661,20 +666,27 @@ func tuiParamsPath() string {
 }
 
 func loadTUIParams() tuiParams {
-	p := tuiParams{previewLines: 3}
 	data, err := os.ReadFile(tuiParamsPath())
 	if err != nil {
-		return p
+		return tuiParams{previewLines: 3}
 	}
+	return parseTUIParams(data)
+}
+
+// parseTUIParams reads segscan-tui. The paths value is taken as written
+// after "= ": a trailing "\ " is an escaped space of a name.
+func parseTUIParams(data []byte) tuiParams {
+	p := tuiParams{previewLines: 3}
 	for _, l := range strings.Split(string(data), "\n") {
 		k, v, ok := strings.Cut(l, "=")
 		if !ok {
 			continue
 		}
+		raw := strings.TrimSuffix(strings.TrimPrefix(v, " "), "\r")
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		switch k {
 		case "paths":
-			p.paths = v
+			p.paths = raw
 		case "bpc":
 			p.bpc = v
 		case "minlen":
@@ -695,13 +707,21 @@ func saveTUIParams(p tuiParams) {
 	if path == "" {
 		return
 	}
+	atomicWrite(path, []byte(encodeTUIParams(p)), 0o644)
+}
+
+func encodeTUIParams(p tuiParams) string {
 	yes := "no"
 	if p.showAllowed {
 		yes = "yes"
 	}
-	data := fmt.Sprintf("# segscan tui settings\npaths = %s\nbpc = %s\nminlen = %s\nshow_allowed = %s\npreview_lines = %d\n",
-		p.paths, p.bpc, p.minlen, yes, p.previewLines)
-	atomicWrite(path, []byte(data), 0o644)
+	paths := p.paths
+	if strings.ContainsAny(paths, "\r\n") {
+		paths = "" // a line of its own would end the value: not kept
+	}
+	clean := func(s string) string { return strings.NewReplacer("\r", "", "\n", "").Replace(s) }
+	return fmt.Sprintf("# segscan tui settings\npaths = %s\nbpc = %s\nminlen = %s\nshow_allowed = %s\npreview_lines = %d\n",
+		paths, clean(p.bpc), clean(p.minlen), yes, p.previewLines)
 }
 
 // splitPaths splits the paths field at white space; "..." and a backslash
