@@ -704,3 +704,16 @@ func TestCLIKeystoreNotADirectory(t *testing.T) {
 		t.Errorf("check with an empty keystore: exit %d %s", code, errs)
 	}
 }
+
+// A keystore that cannot be read is an error of checkWorktree, not an exit:
+// the TUI shows it with the terminal still its own.
+func TestCheckWorktreeKeystoreError(t *testing.T) {
+	r, ks := newKSRepo(t)
+	os.RemoveAll(ks)
+	os.WriteFile(ks, nil, 0o664)
+	t.Setenv("SEGSCAN_KEYSTORE", ks)
+	_, _, err := checkWorktree(r.dir)
+	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("checkWorktree with a broken keystore: %v", err)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -34,6 +35,10 @@ type action struct {
 	// Hash of the file when it was scanned (hex sha256); "" skips the
 	// check. A file that changed since keeps its actions unapplied.
 	Hash string
+	// Hashes: the other files the action rests on, with theirs (an A
+	// mark: every file that holds the fingerprint). Any of them changed
+	// and the action is not applied either.
+	Hashes map[string]string
 	// History: actIgnore of a file in HEAD is confirmed (the value is in
 	// the history anyway).
 	History bool
@@ -76,21 +81,31 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 	// Files that changed since the scan keep their actions.
 	changed := map[string]bool{}
 	current := map[string][]byte{}
+	check := func(f, h string) {
+		if h == "" || changed[f] || current[f] != nil {
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(p.top, f))
+		if err != nil || fileHash(data) != h {
+			changed[f] = true
+			r.Skipped = append(r.Skipped, f+": changed since the scan; rescan and mark it again")
+			return
+		}
+		current[f] = data
+	}
 	for _, a := range p.actions {
-		if a.Hash == "" || changed[a.File] || current[a.File] != nil {
-			continue
+		check(a.File, a.Hash)
+		for _, f := range sortedKeys(a.Hashes) {
+			check(f, a.Hashes[f])
 		}
-		data, err := os.ReadFile(filepath.Join(p.top, a.File))
-		if err != nil || fileHash(data) != a.Hash {
-			changed[a.File] = true
-			r.Skipped = append(r.Skipped, a.File+": changed since the scan; rescan and mark it again")
-			continue
-		}
-		current[a.File] = data
 	}
 	var acts []action
 	for _, a := range p.actions {
-		if !changed[a.File] {
+		ok := !changed[a.File]
+		for f := range a.Hashes {
+			ok = ok && !changed[f]
+		}
+		if ok {
 			acts = append(acts, a)
 		}
 	}
@@ -107,8 +122,15 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				r.Skipped = append(r.Skipped, err.Error())
 				continue
 			}
-			if a.File != "" {
-				line += fmt.Sprintf("  # %s:%d", a.File, a.Line) // where it was seen, never the text
+			if a.File != "" && a.Line > 0 {
+				// where it was seen, never the text; a name with a newline
+				// or another control character is quoted, or it would end
+				// the comment and start a line of its own (path:...)
+				name := a.File
+				if strings.IndexFunc(name, func(c rune) bool { return c < 0x20 || c == 0x7f }) >= 0 {
+					name = strconv.Quote(name)
+				}
+				line += fmt.Sprintf("  # %s:%d", name, a.Line)
 			}
 			allowLines = append(allowLines, line)
 		case actAllowFile:

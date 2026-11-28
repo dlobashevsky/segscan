@@ -708,22 +708,99 @@ func relBelowTop(top, p string) (string, bool) {
 // one it says why check 6 is skipped; a keystore that exists but cannot be
 // trusted (modes, owner, a symlink) is an error, not a skip.
 func checkKeystore(top string) (*keystore, string) {
+	ks, why, err := openCheckKeystore(top)
+	if err != nil {
+		die(err) // die gives the terminal back first, in the TUI
+	}
+	return ks, why
+}
+
+// openCheckKeystore is checkKeystore with the error returned: a keystore
+// that is there but cannot be read.
+func openCheckKeystore(top string) (*keystore, string, error) {
 	cfg, err := loadSecConfig(top)
 	if err != nil {
-		return nil, "the working tree's .sec/config is broken"
+		return nil, "the working tree's .sec/config is broken", nil
 	}
 	ks, err := openKeystore(cfg, top, false, false)
 	if err == errNoKeystore {
-		return nil, "no keystore at " + cfg.keystoreDir()
+		return nil, "no keystore at " + cfg.keystoreDir(), nil
 	}
 	if bad, ok := err.(badKeystorePath); ok {
-		return nil, bad.Error()
+		return nil, bad.Error(), nil
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "segscan: keystore:", err)
-		os.Exit(2)
+		return nil, "", fmt.Errorf("keystore: %v", err)
 	}
-	return ks, ""
+	return ks, "", nil
+}
+
+// loadHeadChains reads the files of HEAD, so that the transform chains its
+// placeholders use are patterns of check 6 too, even where the working
+// tree no longer has them.
+func (ck *checker) loadHeadChains(cf *catFile) {
+	head, err := gitOut("-C", ck.top, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return
+	}
+	if s, err := commitSnapshot(ck.top, cf, strings.TrimSpace(head)); err == nil {
+		for _, f := range s.Files {
+			if !f.Link && !f.Gitlink {
+				ck.info(s, f)
+			}
+		}
+	}
+}
+
+func sortCheckFindings(finds []checkFinding) {
+	sort.SliceStable(finds, func(i, j int) bool {
+		if finds[i].File != finds[j].File {
+			return finds[i].File < finds[j].File
+		}
+		return finds[i].Line < finds[j].Line
+	})
+}
+
+// checkWorktree is segscan check of the working tree, as cmdCheck does it
+// without -staged, -range or -all: what the TUI shows after a save. why
+// says why known values were not checked, if they were not.
+func checkWorktree(top string) (finds []checkFinding, why string, err error) {
+	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
+	seen := map[string]bool{}
+	collect := func(fs []checkFinding) {
+		for _, f := range fs {
+			key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.Check, f.File, f.Line, f.Col, f.Msg)
+			if !seen[key] {
+				seen[key] = true
+				finds = append(finds, f)
+			}
+		}
+	}
+	s, err := worktreeSnapshot(top)
+	if err != nil {
+		return nil, "", err
+	}
+	collect(ck.run(s))
+	ks, why, err := openCheckKeystore(top)
+	if err != nil {
+		return nil, "", err // the TUI shows it and goes on
+	}
+	if ks != nil {
+		defer ks.close()
+		cf, err := newCatFile(top)
+		if err != nil {
+			return nil, "", err
+		}
+		defer cf.close()
+		ck.loadHeadChains(cf)
+		ck.known = buildMatcher(ks, ck.chains)
+		if s, err = worktreeSnapshot(top); err != nil {
+			return nil, "", err
+		}
+		collect(ck.runKnown(s))
+	}
+	sortCheckFindings(finds)
+	return finds, why, nil
 }
 
 func cmdCheck(args []string) {
@@ -748,6 +825,15 @@ func cmdCheck(args []string) {
 	top := secRoot()
 	if top == "" {
 		die(fmt.Errorf("no %s/ in this repository: run segscan init", secDir))
+	}
+	if n == 0 {
+		// The working tree: the same code the TUI runs after a save.
+		finds, why, err := checkWorktree(top)
+		if err != nil {
+			die(err)
+		}
+		printCheck(finds, why, *asJSON, *noHeader)
+		return
 	}
 	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
 	var cf *catFile
@@ -811,39 +897,31 @@ func cmdCheck(args []string) {
 	ks, why := checkKeystore(top)
 	if ks != nil {
 		defer ks.close()
-		if head, err := gitOut("-C", top, "rev-parse", "-q", "--verify", "HEAD^{commit}"); err == nil {
-			if cf == nil {
-				if cf, err = newCatFile(top); err != nil {
-					die(err)
-				}
-				defer cf.close()
+		if cf == nil {
+			var err error
+			if cf, err = newCatFile(top); err != nil {
+				die(err)
 			}
-			if s, err := commitSnapshot(top, cf, strings.TrimSpace(head)); err == nil {
-				for _, f := range s.Files {
-					if !f.Link && !f.Gitlink {
-						ck.info(s, f)
-					}
-				}
-			}
+			defer cf.close()
 		}
+		ck.loadHeadChains(cf)
 		ck.known = buildMatcher(ks, ck.chains)
 		each(func(s *snapshot) { collect(ck.runKnown(s)) })
 	}
 	if *rng == "" && !*all {
-		sort.SliceStable(finds, func(i, j int) bool {
-			if finds[i].File != finds[j].File {
-				return finds[i].File < finds[j].File
-			}
-			return finds[i].Line < finds[j].Line
-		})
+		sortCheckFindings(finds)
 	}
+	printCheck(finds, why, *asJSON, *noHeader)
+}
+
+func printCheck(finds []checkFinding, why string, asJSON, noHeader bool) {
 	for i, f := range finds {
-		if *asJSON {
+		if asJSON {
 			out, _ := json.Marshal(f)
 			fmt.Println(string(out))
 			continue
 		}
-		if i == 0 && !*noHeader {
+		if i == 0 && !noHeader {
 			fmt.Println("commit\tfile\tline\tcol\tcheck\tmessage")
 		}
 		fmt.Printf("%s\t%s\t%d\t%d\t%s\t%s\n", f.Commit, escape(f.File), f.Line, f.Col, f.Check, escape(f.Msg))

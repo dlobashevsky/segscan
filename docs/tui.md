@@ -1,7 +1,9 @@
 # segscan tui: reviewing findings before a commit
 
-Status: **draft, not implemented**. This is the requirements text for
-discussion. The open questions are at the end.
+Status: **stage 1 implemented, except the LLM column** (`segscan tui`,
+`tui.go`, `tuiapp.go`). Not yet: LLM scores in the background (next),
+action `K` (stage 2), secret files (stage 3), and the `preview_width` and
+`mask` settings. The open questions are at the end.
 
 ## Goal
 

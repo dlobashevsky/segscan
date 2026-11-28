@@ -29,6 +29,33 @@ lowers the noise: its own identifiers and abbreviations become known words.
 
 Exit code: 0 clean, 1 findings, 2 error.
 
+## Reviewing in a terminal
+
+    segscan tui [-now] [path...]
+
+A screen with the findings above and the lines around the current one
+below, the finding highlighted. Mark what to do with each, then save:
+
+| Key | Action |
+|---|---|
+| `I` | the file into `.gitignore` (and out of the index) |
+| `F` | the file into the allowlist (`path:`) |
+| `a` | the fingerprint into the allowlist, in this file only (`fp path:/file`) |
+| `A` | the fingerprint into the allowlist, everywhere: every finding with it |
+| `U` / `X` | unmark the row / all |
+| `s` `h` `f` `z` | sort order, hide marked rows, only this file, fold a file into one row |
+| `E` | open the file in `$VISUAL`/`$EDITOR` at the line, then rescan; `segscan:allow` you write on a line skips it |
+| `w` | save: the list of changes, then apply them on `y` |
+| `q` | quit; with marks, asks: apply all, discard all, or stay |
+
+Nothing is written before a save. A file changed since the scan keeps its
+marks unapplied. After a save, in a `.sec/` repository, the result of
+`segscan check` is shown. The launch screen (skipped with `-now`) sets the
+paths, `-bpc`, `-minlen`, whether to list findings already in the
+allowlist, and the preview size; they are kept in `segscan-tui` in the git
+directory. The same actions without a terminal: `segscan allow` and
+`segscan ignore` (below). Linux only for now. Details: [docs/tui.md](docs/tui.md).
+
 ## Output
 
 TSV with a header line (`-no-header` drops it):
