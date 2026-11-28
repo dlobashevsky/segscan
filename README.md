@@ -82,10 +82,12 @@ about 3.5-4.5.
   marked one must close its own quotes however a backslash is read,
   since a string may run over lines in almost any language. JSON, INI,
   `.env`, Dockerfiles, SQL, XML/HTML, JS/TS, Scala, Swift, Ruby and Perl
-  are refused: use `allow fp`. `ignore` refuses a file committed in
-  `HEAD` without `-history`, a directory, and a file whose staged version
-  differs from both the file and `HEAD`: ignoring it does not take the
-  value out of the history.
+  are refused: use `allow fp`, and so is a Java file with a `\u` escape
+  (Java reads them before strings and comments). `ignore` refuses a file
+  committed in `HEAD` without `-history` (ignoring it does not take the
+  value out of the history), a directory, a file whose staged version
+  differs from both the file and `HEAD`, and a file outside the sparse
+  checkout.
 - `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary
   word.
 - Lock files, `*.min.js` and `*.map` are always skipped

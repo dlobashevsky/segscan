@@ -25,6 +25,9 @@ type commentStyle struct {
 	rawOpen   []*regexp.Regexp
 	escSingle bool // a backslash may escape inside single quotes too (shell $'...')
 	yaml      bool // YAML: quotes only open a scalar; block and multi-line scalars
+	// Java translates \uXXXX anywhere in the source before it reads a
+	// token: \u0022 is a quote, \u000a a newline. A file with one is refused.
+	unicodeEsc bool
 }
 
 var (
@@ -41,6 +44,7 @@ var (
 	// Rust: ordinary strings may span lines too
 	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
+	styleJava = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}, unicodeEsc: true}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	styleLua  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
 )
@@ -69,7 +73,9 @@ func styleFor(p string) (commentStyle, bool) {
 		return styleC, true
 	case ".rs":
 		return styleRust, true
-	case ".java", ".kt":
+	case ".java":
+		return styleJava, true
+	case ".kt":
 		return styleJVM, true
 	case ".cs":
 		return styleCS, true
@@ -104,6 +110,9 @@ func markLine(repoPath string, data []byte, no int) ([]byte, error) {
 	}
 	if no == 1 && bytes.HasPrefix(body, []byte("#!")) {
 		return nil, fmt.Errorf("%s:1: a #! line: added text would become an argument of the interpreter", repoPath)
+	}
+	if st.unicodeEsc && bytes.Contains(data, []byte(`\u`)) {
+		return nil, fmt.Errorf("%s: the file holds \\u escapes, which Java reads before strings and comments (use the fingerprint)", repoPath)
 	}
 	if why := unsafeLine(st, lines, no-1); why != "" {
 		return nil, fmt.Errorf("%s:%d: %s", repoPath, no, why)

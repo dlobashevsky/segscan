@@ -47,10 +47,12 @@ func TestMarkLine(t *testing.T) {
 		{"Dockerfile", "ENV K=v\n", 1, ""},
 		{"a.ini", "k = v\n", 1, ""},
 		{"a.py", "k = '''x\ny'''\n", 2, ""},
-		{"a.yaml", "k: v\n", 2, ""},                                   // no such line
-		{"a.rs", "let s = r#\"first\nsecret\nlast\"#;\n", 2, ""},      // Rust raw string
-		{"a.rs", "let s = br\"a\nb\";\n", 2, ""},                      // byte raw string
-		{"a.java", "String s = \"\"\"\n  secret\n  \"\"\";\n", 2, ""}, // text block
+		{"a.yaml", "k: v\n", 2, ""},                                                  // no such line
+		{"a.rs", "let s = r#\"first\nsecret\nlast\"#;\n", 2, ""},                     // Rust raw string
+		{"a.rs", "let s = br\"a\nb\";\n", 2, ""},                                     // byte raw string
+		{"a.java", "String s = \"\"\"\n  secret\n  \"\"\";\n", 2, ""},                // text block
+		{"a.java", "String s = \\u0022\\u0022\\u0022\n  secret\n  \"\"\";\n", 2, ""}, // the same, escaped
+		{"a.java", "String s = \"x\";\n", 1, "String s = \"x\"; // segscan:allow\n"},
 		{"a.kt", "val s = \"\"\"\nsecret\n\"\"\"\n", 2, ""},
 		{"a.cs", "var s = @\"a\nsecret\";\n", 2, ""},
 		{"a.cpp", "auto s = R\"(a\nsecret)\";\n", 2, ""},

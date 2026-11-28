@@ -59,11 +59,16 @@ func TestCLIIgnoreRmRefused(t *testing.T) {
 	if _, _, code := r.run("git", "sparse-checkout", "set", "--cone", "in"); code != 0 {
 		t.Skip("no sparse-checkout")
 	}
-	_, errs, code := r.run("segscan", "ignore", "-history", "out/b.txt")
-	if code == 0 {
-		t.Skip("git rm --cached accepted a file outside the cone here")
+	// out/b.txt is refused before anything changes for it; in/a.txt goes
+	// on, out of the index and with its rule.
+	_, errs, code := r.run("segscan", "ignore", "-history", "in/a.txt", "out/b.txt")
+	if code != 1 || !strings.Contains(errs, "sparse") {
+		t.Errorf("exit %d %s", code, errs)
 	}
-	if data, err := os.ReadFile(filepath.Join(r.dir, ".gitignore")); err == nil && strings.Contains(string(data), "b.txt") {
-		t.Errorf(".gitignore written although git rm failed: %s", errs)
+	if got := r.read(".gitignore"); got != "/in/a.txt\n" {
+		t.Errorf(".gitignore: %q", got)
+	}
+	if out := r.must("git", "ls-files"); out != "out/b.txt\n" {
+		t.Errorf("index: %q", out)
 	}
 }

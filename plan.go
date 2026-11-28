@@ -172,7 +172,13 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				r.Skipped = append(r.Skipped, a.File+": a directory; name its files, or add it to .gitignore by hand")
 				continue
 			}
-			tracked, inHead := p.gitState(a.File)
+			tracked, inHead, skip := p.gitState(a.File)
+			if skip {
+				// git rm --cached refuses it, after removing the files
+				// named before it.
+				r.Skipped = append(r.Skipped, a.File+": outside the sparse checkout (skip-worktree); git rm --cached refuses it")
+				continue
+			}
 			if tracked && p.stagedDiffers(a.File, inHead) {
 				// git rm --cached refuses it; say so before .gitignore
 				// changes, so nothing is half done.
@@ -189,25 +195,14 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 			if p.inManifest(a.File) {
 				r.Warn = append(r.Warn, a.File+": has a .sec/manifest entry; check will miss the file in a clean clone")
 			}
-			ignoreLines = append(ignoreLines, "/"+gitignoreEscape(a.File))
-			if tracked && !untracked[a.File] {
+			switch {
+			case !tracked:
+				ignoreLines = append(ignoreLines, "/"+gitignoreEscape(a.File))
+			case !untracked[a.File]:
 				untracked[a.File] = true // a file named twice leaves the index once
 				untrack = append(untrack, a)
 			}
 		}
-	}
-	// Out of the index first: git rm --cached may refuse (a sparse
-	// checkout cone, a lock), and then .gitignore must not have changed
-	// either. The other way round a failure leaves the rule without the
-	// untracking.
-	for _, a := range untrack {
-		if !dry {
-			cmd := exec.Command("git", "-C", p.top, "--literal-pathspecs", "rm", "--cached", "-q", "--", a.File)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return r, fmt.Errorf("git rm --cached %s: %v %s", a.File, err, bytes.TrimSpace(out))
-			}
-		}
-		r.Done = append(r.Done, fmt.Sprintf("%s: %s from the index (the file stays on disk)", a.File, verb("removed", "would be removed")))
 	}
 	allowRel := p.allowPath
 	if rel, err := filepath.Rel(p.top, p.allowPath); err == nil && !strings.HasPrefix(rel, "..") {
@@ -237,13 +232,42 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 		}
 	}
 
+	// A tracked file: out of the index first, then its rule, one file at a
+	// time. git rm --cached may refuse (a lock, a sparse cone), and then
+	// .gitignore must not have changed either: the other way round the
+	// rule is there without the untracking. One call for all the files
+	// would not do: git removes what it can before it reports the rest.
+	if len(untrack) > 0 {
+		if err := repoDir(p.top, p.top); err != nil {
+			return r, err
+		}
+	}
+	gitignore := filepath.Join(p.top, ".gitignore")
+	for _, a := range untrack {
+		if !dry {
+			cmd := exec.Command("git", "-C", p.top, "--literal-pathspecs", "rm", "--cached", "-q", "--", a.File)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return r, fmt.Errorf("git rm --cached %s: %v %s", a.File, err, bytes.TrimSpace(out))
+			}
+		}
+		r.Done = append(r.Done, fmt.Sprintf("%s: %s from the index (the file stays on disk)", a.File, verb("removed", "would be removed")))
+		added, err := appendLines(gitignore, []string{"/" + gitignoreEscape(a.File)}, lineHas, dry)
+		if err != nil {
+			return r, err
+		}
+		for _, l := range added {
+			r.Done = append(r.Done, fmt.Sprintf(".gitignore: %s %s", verb("added", "would add"), l))
+		}
+	}
+
 	return r, nil
 }
 
 // gitState reports whether a repository path is in the index and in HEAD.
-func (p *plan) gitState(f string) (tracked, inHead bool) {
-	out, _ := exec.Command("git", "-C", p.top, "--literal-pathspecs", "ls-files", "-z", "--", f).Output()
+func (p *plan) gitState(f string) (tracked, inHead, skipWorktree bool) {
+	out, _ := exec.Command("git", "-C", p.top, "--literal-pathspecs", "ls-files", "-t", "-z", "--", f).Output()
 	tracked = len(out) > 0
+	skipWorktree = bytes.HasPrefix(out, []byte("S "))
 	inHead = exec.Command("git", "-C", p.top, "cat-file", "-e", "HEAD:"+f).Run() == nil
 	return
 }
