@@ -122,10 +122,13 @@ Safeguards:
   findings of at least N bits per char. Entries of `-words` lists that the
   built-in model reports are left out as well.
 - `segscan model check`: the dictionary words of length 6 and more that
-  look random under the built-in model (above 5.0 bits per letter, `-maxbpc`),
+  look random under the built-in model (above 4.0 bits per letter, `-maxbpc`),
   and, with the keystore, the words that are letter fragments of a value.
   Exit 1 if there are any. A harmless word is accepted with a `word:<word>`
-  line in the allowlist. `-since REV` also lists the words added since the
+  line in the allowlist. Expect some: names and glued words reach about 4.9
+  bits per letter, while about 1% of random 6-letter strings, and fewer of
+  the longer ones, cost less than 4.0. Raising `-maxbpc` to 5.0 would let
+  through more than 5% of random strings of any length. `-since REV` also lists the words added since the
   model in that git revision.
 - `hook_model = warn` or `block` in `.sec/config`: the pre-commit hook runs
   model check on a staged model that differs from `HEAD`'s. Off by default.

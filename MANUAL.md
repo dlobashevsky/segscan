@@ -505,7 +505,8 @@ catches only values the keystore already knows. Hence:
   the built-in model first, or the guarded model keeps reporting them;
 - run `segscan model check` before committing a model: it lists the
   dictionary words of 6 letters or more that look random under the
-  built-in model (`-maxbpc`, default 5.0), and, with the keystore, the
+  built-in model (`-maxbpc`, default 4.0; names and glued words of a repository reach
+  about 4.9, so expect a few harmless ones), and, with the keystore, the
   words that are letter fragments of a value, current or retired. Exit 1
   if there are any. `word:<word>` in `.sec/allow` accepts a harmless word;
   `-since REV` also lists the words added since that revision's model;
