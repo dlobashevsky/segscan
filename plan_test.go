@@ -62,6 +62,17 @@ func TestCLIIgnore(t *testing.T) {
 	r.must("git", "commit", "-q", "-m", "c")
 	r.must("git", "add", "staged.txt")
 
+	// A pathspec character in the name: only that file leaves the index.
+	r.write("foo?.txt", "x\n")
+	r.write("foo1.txt", "x\n")
+	r.must("git", "add", "foo?.txt", "foo1.txt")
+	r.must("segscan", "ignore", "foo?.txt")
+	if out := r.must("git", "ls-files", "foo1.txt"); out != "foo1.txt\n" {
+		t.Errorf("ignore foo?.txt took foo1.txt out of the index too")
+	}
+	r.must("git", "rm", "-q", "--cached", "foo1.txt")
+	r.write(".gitignore", "")
+
 	r.must("segscan", "ignore", "new.txt", "staged.txt")
 	if got := r.read(".gitignore"); got != "/new.txt\n/staged.txt\n" {
 		t.Errorf(".gitignore: %q", got)

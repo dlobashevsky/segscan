@@ -215,7 +215,7 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 	// 3. Out of the index.
 	for _, a := range untrack {
 		if !dry {
-			cmd := exec.Command("git", "-C", p.top, "rm", "--cached", "-q", "--", a.File)
+			cmd := exec.Command("git", "-C", p.top, "--literal-pathspecs", "rm", "--cached", "-q", "--", a.File)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return r, fmt.Errorf("git rm --cached %s: %v %s", a.File, err, bytes.TrimSpace(out))
 			}

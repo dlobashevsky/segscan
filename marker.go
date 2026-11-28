@@ -29,7 +29,7 @@ type commentStyle struct {
 }
 
 var (
-	styleHash  = commentStyle{start: "#", quotes: `"'`}
+	styleNginx = commentStyle{start: "#", quotes: `"'`, spanLines: true}
 	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, spanLines: true}
 	stylePy    = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleTOML  = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
@@ -43,9 +43,11 @@ var (
 	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])b?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@"|"@`)}}
-	styleSQL  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*", "$$"}, spanLines: true}
-	styleLua  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
-	styleXML  = commentStyle{start: "<!--", end: "-->", xml: true}
+	// PostgreSQL dollar quotes: $$...$$ and $tag$...$tag$
+	styleSQL = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*"}, spanLines: true,
+		rawOpen: []*regexp.Regexp{regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)?\$`)}}
+	styleLua = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
+	styleXML = commentStyle{start: "<!--", end: "-->", xml: true}
 )
 
 // styleFor returns the comment style of a repository path, false for a type
@@ -57,8 +59,6 @@ func styleFor(p string) (commentStyle, bool) {
 		return styleShell, true
 	case ".py":
 		return stylePy, true
-	case ".rb", ".pl":
-		return styleHash, true
 	case ".yaml", ".yml":
 		return styleYAML, true
 	case ".toml":
@@ -85,7 +85,7 @@ func styleFor(p string) (commentStyle, bool) {
 		// nginx allows a comment after any directive; other .conf formats
 		// are anybody's guess.
 		if base == "nginx.conf" || strings.Contains("/"+path.Dir(p)+"/", "/nginx/") {
-			return styleHash, true
+			return styleNginx, true
 		}
 	}
 	return commentStyle{}, false

@@ -50,6 +50,11 @@ func TestMarkLine(t *testing.T) {
 		// no false alarm: a string ending in r is not a raw string
 		{"a.rs", "let u = \"user\";\n", 1, "let u = \"user\"; // segscan:allow\n"},
 		{"a.go", "u := \"server\"\n", 1, "u := \"server\" // segscan:allow\n"},
+		{"a.sql", "insert into t values ($p$a\nsecret\n$p$);\n", 2, ""}, // tagged dollar quote
+		{"a.sql", "select 1;\n", 1, "select 1; -- segscan:allow\n"},
+		{"a.rb", "s = \"a\nsecret\"\n", 2, ""}, // Ruby and Perl: not offered
+		{"a.pl", "my $s = 1;\n", 1, ""},
+		{"nginx/n.conf", "return 200 \"a\nsecret\nb\";\n", 2, ""}, // nginx strings span lines
 	} {
 		got, err := markLine(c.file, []byte(c.in), c.line)
 		switch {
