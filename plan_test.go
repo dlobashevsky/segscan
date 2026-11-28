@@ -105,6 +105,17 @@ func TestCLIAllowFPScoped(t *testing.T) {
 	if _, errs, code := r.run("segscan", "allow", "fp", "-file", "nodes", fp); code == 0 || !strings.Contains(errs, "a directory") {
 		t.Errorf("-file with a directory: exit %d %s", code, errs)
 	}
+	if _, errs, code := r.run("segscan", "allow", "path", "nodes/n1"); code == 0 || !strings.Contains(errs, "a directory") {
+		t.Errorf("allow path with a directory: exit %d %s", code, errs)
+	}
+	for _, g := range []string{"[", "/nodes/a[b/x", "/"} {
+		if _, errs, code := r.run("segscan", "allow", "fp", "-path", g, fp); code == 0 {
+			t.Errorf("-path %q: exit %d %s", g, code, errs)
+		}
+	}
+	if strings.Contains(r.read(".segscan-allow"), "path:[") || strings.Contains(r.read(".segscan-allow"), "path:/nodes/n1") {
+		t.Errorf("refused lines were written:\n%s", r.read(".segscan-allow"))
+	}
 
 	// Run from a subdirectory: the allowlist at the top is written.
 	cmd = exec.Command(filepath.Join(r.bin, "segscan"), "allow", "fp", "-file", "y.conf", fp)

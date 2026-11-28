@@ -41,14 +41,11 @@ func cmdAllow(args []string) {
 		case *inFile != "" && *inGlob != "":
 			die(fmt.Errorf("allow fp: -file or -path, not both"))
 		case *inFile != "":
-			// A directory would make path:/dir, which covers every file
-			// below it: -file is one file.
-			f := mustRepoFile(*inFile)
-			if st, err := os.Stat(*inFile); (err == nil && st.IsDir()) || p.indexDir(f) {
-				die(fmt.Errorf("allow fp -file %s: a directory; use -path for a glob", *inFile))
-			}
-			glob = "/" + globEscape(f)
+			glob = "/" + globEscape(p.mustNotDir(*inFile, "use -path for a glob"))
 		case *inGlob != "":
+			if err := checkPathGlob(*inGlob); err != nil {
+				die(fmt.Errorf("allow fp -path %s: %v", *inGlob, err))
+			}
 			glob = *inGlob
 		}
 	}
@@ -61,7 +58,7 @@ func cmdAllow(args []string) {
 			}
 			p.actions = append(p.actions, action{Kind: actAllowFP, FP: fp, Glob: glob})
 		case "path":
-			p.actions = append(p.actions, action{Kind: actAllowFile, File: mustRepoFile(a)})
+			p.actions = append(p.actions, action{Kind: actAllowFile, File: p.mustNotDir(a, "add path:DIR/ by hand to skip a whole directory")})
 		}
 	}
 	runPlan(p, *dry)
@@ -132,6 +129,26 @@ func allowFilePath(p string) string {
 		}
 	}
 	return p
+}
+
+// checkPathGlob reports a path: glob that can never match: empty, or a
+// part path.Match calls malformed ("[", "a[b").
+func checkPathGlob(pat string) error {
+	if p := strings.TrimSuffix(cleanRel(strings.TrimLeft(pat, "/")), "/"); p == "" || p == "." {
+		return fmt.Errorf("an empty glob")
+	}
+	return checkGlob(pat)
+}
+
+// mustNotDir is mustRepoFile for an operand that must name one file: a
+// directory, on disk or in the index, would make path:/dir, which covers
+// every file below it.
+func (p *plan) mustNotDir(a, hint string) string {
+	f := mustRepoFile(a)
+	if st, err := os.Stat(a); (err == nil && st.IsDir()) || p.indexDir(f) {
+		die(fmt.Errorf("%s: a directory; %s", a, hint))
+	}
+	return f
 }
 
 // mustRepoFile gives a command-line path as a repository path; it must lie
