@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -112,6 +113,19 @@ func TestCLIModelCheckKeystore(t *testing.T) {
 	}
 }
 
+// scan_minlen and scan_bpc are for reporting: the guard keeps its own
+// thresholds.
+func TestCLITrainGuardIgnoresScanThresholds(t *testing.T) {
+	r, _ := newKSRepo(t)
+	r.write(".sec/config", r.read(".sec/config")+"scan_minlen = 100\nscan_bpc = 7.5\n")
+	writeSpoilCorpus(r)
+	r.must("git", "add", "-A")
+	r.must("segscan", "train", "-guard")
+	if out, _, code := r.run("segscan", "model", "check"); code != 0 {
+		t.Errorf("guarded model with scan_minlen = 100: exit %d\n%s", code, out)
+	}
+}
+
 func TestCLIHookModel(t *testing.T) {
 	r, _ := newKSRepo(t)
 	writeSpoilCorpus(r)
@@ -129,6 +143,17 @@ func TestCLIHookModel(t *testing.T) {
 		_, errs, code := r.run("segscan", "hook")
 		if !strings.Contains(errs, spoilKey) || (mode == "block") != (code == 1) {
 			t.Errorf("hook_model = %s: exit %d\n%s", mode, code, errs)
+		}
+		if mode == "block" {
+			// -m and $SEGSCAN_MODEL choose the scan's model; the model
+			// being committed is still checked.
+			env := r.env
+			r.env = append(append([]string{}, env...), "SEGSCAN_MODEL="+filepath.Join(t.TempDir(), "other.model"))
+			_, errs, code := r.run("segscan", "hook")
+			r.env = env
+			if code != 1 || !strings.Contains(errs, spoilKey) {
+				t.Errorf("hook_model = block with SEGSCAN_MODEL: exit %d\n%s", code, errs)
+			}
 		}
 		r.write(".sec/config", strings.Replace(r.read(".sec/config"), "hook_model = "+mode+"\n", "", 1))
 	}

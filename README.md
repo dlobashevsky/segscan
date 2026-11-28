@@ -117,7 +117,8 @@ Safeguards:
   same fragment count as usual. A key is found only inside findings, so it
   never becomes a word. The price: what the built-in model reports is
   learnt only once its fp is in the allowlist, so a guarded model leaves
-  more false positives until they are reviewed. `-guard-bpc N` counts only
+  more false positives until they are reviewed. The guard uses the default
+  thresholds, not `scan_bpc` or `scan_minlen`; `-guard-bpc N` counts only
   findings of at least N bits per char.
 - `segscan model check`: the dictionary words of length 6 and more that
   look random under the built-in model (above 4.0 bits per letter, `-maxbpc`),

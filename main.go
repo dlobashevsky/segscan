@@ -375,8 +375,12 @@ func cmdTrain(args []string) {
 		if baseModel == nil {
 			die(fmt.Errorf("train -guard: no built-in model"))
 		}
-		o := c.o
-		o.MinBpc = *guardBpc // scan_bpc is for reporting, not for this
+		// The default thresholds, not this command's: scan_bpc and
+		// scan_minlen are for reporting, and a key shorter than
+		// scan_minlen must still be kept out.
+		o := defaultOpts
+		o.Skip = c.o.Skip
+		o.MinBpc = *guardBpc
 		g = &trainGuardScan{sc: NewScanner(baseModel, o), allow: allow}
 	}
 	m := train(files, allow, *top, c.o.Skip, g, lists...)
@@ -697,7 +701,10 @@ func cmdHook(args []string) {
 	if c.sec != nil {
 		indexOnly = c.fromIndex()
 	}
-	if indexOnly && c.sec.HookModel != "off" {
+	// fromIndex has put the staged config into c.sec; -m and
+	// $SEGSCAN_MODEL choose the model of the scan, not whether the model
+	// being committed is checked.
+	if c.sec != nil && c.sec.HookModel != "off" {
 		c.hookModelCheck()
 	}
 	block := !*warn

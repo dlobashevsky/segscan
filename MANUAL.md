@@ -499,7 +499,8 @@ clear, and the scan with that model no longer reports it. Check 6 above
 catches only values the keystore already knows. Hence:
 
 - train with `-guard`: a fragment inside a finding of the built-in model
-  is not learnt unless the finding's fp is in `.sec/allow` (`-guard-bpc N`:
+  is not learnt unless the finding's fp is in `.sec/allow`. It uses the
+  default thresholds, not `scan_bpc` or `scan_minlen` (`-guard-bpc N`:
   only findings of at least N bits per char count). Review the findings of
   the built-in model first, or the guarded model keeps reporting them;
 - run `segscan model check` before committing a model: it lists the
