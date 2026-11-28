@@ -234,3 +234,12 @@ func TestNoServerNeeded(t *testing.T) {
 		t.Fatalf("private key only: exit %d, output %q", code, out.String())
 	}
 }
+
+func TestNegativeContextRejected(t *testing.T) {
+	for _, f := range []string{"-k", "-minctx", "-maxctx", "-maxline", "-maxfind"} {
+		var out bytes.Buffer
+		if code := cmdScore([]string{"-dry", f + "=-1"}, strings.NewReader(""), &out); code != 2 {
+			t.Fatalf("%s=-1: exit %d", f, code)
+		}
+	}
+}

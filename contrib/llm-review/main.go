@@ -91,6 +91,9 @@ func cmdScore(args []string, in io.Reader, out io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	if o.K < 0 || o.MinSide < 0 || o.MaxSide < 0 || o.MaxLine < 0 || o.MaxFind < 0 {
+		return fail(fmt.Errorf("-k, -minctx, -maxctx, -maxline and -maxfind must not be negative"))
+	}
 
 	system := defaultSystem
 	if *systemPath != "" {
