@@ -132,3 +132,5 @@ every core.
 
 0 if every finding got a score, 1 if some did not (they are printed with
 `"llm_score": null` and `llm_error`, and reported on stderr), 2 on an error.
+With `-dry`, 1 means some findings were not found in their source and are
+missing from the output (see stderr).

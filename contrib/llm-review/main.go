@@ -140,6 +140,11 @@ func cmdScore(args []string, in io.Reader, out io.Writer) int {
 		prompts[i] = append(append([]message(nil), prefix...), message{"user", u})
 	}
 	if *dry {
+		for _, r := range res {
+			if r.err != nil {
+				return 1 // the output lacks the findings reported on stderr
+			}
+		}
 		return 0
 	}
 

@@ -183,6 +183,12 @@ func TestDryAndOrder(t *testing.T) {
 	if code := cmdScore([]string{"-dry", "-C", dir}, strings.NewReader(in), &out); code != 0 {
 		t.Fatal(code)
 	}
+	// A finding not found in its source, with only a preview: skipped, exit 1.
+	in2 := in + "\n" + `{"file":"a.txt","line":5,"col":1,"length":16,"kind":"entropy","fp":"bbb","text":"Zq8vN2kLpX","truncated":true}`
+	var out2 bytes.Buffer
+	if code := cmdScore([]string{"-dry", "-C", dir}, strings.NewReader(in2), &out2); code != 1 || strings.Count(out2.String(), "\n") != 1 {
+		t.Fatalf("exit %d, output %q", code, out2.String())
+	}
 	if !strings.Contains(out.String(), `line: k=<candidate>Zq8vN2kLpX7wR4tY</candidate>"`) {
 		t.Fatal(out.String())
 	}
