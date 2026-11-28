@@ -117,12 +117,14 @@ func (s *tuiState) nMarked() int {
 // rebuild recomputes the view after a change of sort, filter or marks,
 // keeping the cursor on the same row where it can.
 func (s *tuiState) rebuild() {
-	var keep string
+	var keep, keepFile string
 	if s.cur < len(s.view) {
-		if it := s.view[s.cur]; it.row >= 0 {
+		it := s.view[s.cur]
+		keepFile = "file:" + it.file
+		if it.row >= 0 {
 			keep = s.rows[it.row].key()
 		} else {
-			keep = "file:" + it.file
+			keep = keepFile
 		}
 	}
 	idx := make([]int, 0, len(s.rows))
@@ -188,13 +190,21 @@ func (s *tuiState) rebuild() {
 		}
 		s.view = append(s.view, viewItem{row: i, file: f})
 	}
+	// The same row, or the folded row of its file.
 	s.cur = 0
+	found := false
 	for i, it := range s.view {
 		k := "file:" + it.file
 		if it.row >= 0 {
 			k = s.rows[it.row].key()
 		}
 		if k == keep {
+			s.cur, found = i, true
+			break
+		}
+	}
+	for i, it := range s.view {
+		if !found && it.row < 0 && "file:"+it.file == keepFile {
 			s.cur = i
 			break
 		}
@@ -447,7 +457,14 @@ func (s *tuiState) key(k string) {
 		if r != nil {
 			s.editFile, s.editLine = r.f.File, r.f.Line
 		} else if it.file != "" {
-			s.editFile, s.editLine = it.file, 1
+			// a folded file: the name it was scanned under, as for a row
+			// (it.file is from the repository top, the editor runs here)
+			for _, o := range s.rows {
+				if o.file == it.file {
+					s.editFile, s.editLine = o.f.File, 1
+					break
+				}
+			}
 		}
 	case "r":
 		s.rescan = true
@@ -516,7 +533,15 @@ func (s *tuiState) planActions() []action {
 		}
 		if s.fpMark[r.fp] && !done[r.fp] {
 			done[r.fp] = true
-			out = append(out, action{Kind: actAllowFP, FP: r.fp, File: r.file, Line: r.f.Line, Hash: s.hashes[r.file]})
+			// Everywhere: every file with the fingerprint must still be
+			// as it was scanned.
+			all := map[string]string{}
+			for _, o := range s.rows {
+				if o.fp == r.fp && o.file != r.file {
+					all[o.file] = s.hashes[o.file]
+				}
+			}
+			out = append(out, action{Kind: actAllowFP, FP: r.fp, File: r.file, Line: r.f.Line, Hash: s.hashes[r.file], Hashes: all})
 		}
 		if k := fpHereKey(r.fp, r.file); s.fpHere[k] && !s.fpMark[r.fp] && !done[k] {
 			done[k] = true

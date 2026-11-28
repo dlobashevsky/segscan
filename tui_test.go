@@ -391,3 +391,22 @@ func TestTUIFileWithAllowedPrivateKey(t *testing.T) {
 		t.Errorf("F with a hidden private key: %q", s.msg)
 	}
 }
+
+// A carries the hash of every file with the fingerprint; E on a folded
+// file opens the name it was scanned under.
+func TestTUIAHashesAndFoldedEdit(t *testing.T) {
+	rows := testRows()
+	extra := *rows[1]
+	extra.file, extra.f.File = "sub/d.conf", "d.conf" // scanned from sub/
+	s := newTUIState(append(rows, &extra))
+	s.hashes = map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc", "sub/d.conf": "hd"}
+	keys(s, "home", "A") // a.conf
+	acts := s.planActions()
+	if len(acts) != 1 || acts[0].Hashes["sub/d.conf"] != "hd" {
+		t.Errorf("A: %+v", acts)
+	}
+	keys(s, "end", "z", "E") // sub/d.conf is last, folded
+	if s.editFile != "d.conf" {
+		t.Errorf("E on a folded file: %q", s.editFile)
+	}
+}
