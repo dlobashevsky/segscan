@@ -649,13 +649,14 @@ func (a *tuiApp) edit(file string, line int) {
 		ed = "vi"
 	}
 	a.t.suspend()
-	argv := strings.Fields(ed)
 	// "./" before a relative name: a file named -Ssession.vim must not
 	// be an option of the editor (not every editor knows "--")
 	if !filepath.IsAbs(file) {
 		file = "./" + file
 	}
-	cmd := exec.Command(argv[0], append(argv[1:], fmt.Sprintf("+%d", line), file)...)
+	// Through the shell, as git runs its editor: $VISUAL may quote a path
+	// with spaces or hold arguments; the line and the file go in as "$@".
+	cmd := exec.Command("sh", "-c", ed+` "$@"`, "sh", fmt.Sprintf("+%d", line), file)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err := cmd.Run()
 	a.t.resume()
