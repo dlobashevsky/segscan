@@ -102,7 +102,7 @@ func TestCLIIgnore(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.dir, "-n")); err == nil || strings.Contains(r.read(".gitignore"), "new.txt") {
 		t.Fatalf("ignore FILE -n wrote")
 	}
-	r.must("segscan", "ignore", "new.txt", "staged.txt")
+	r.must("segscan", "ignore", "new.txt", "staged.txt", "staged.txt") // twice: once
 	if got := r.read(".gitignore"); got != "/new.txt\n/staged.txt\n" {
 		t.Errorf(".gitignore: %q", got)
 	}

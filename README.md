@@ -75,14 +75,16 @@ about 3.5-4.5.
 
   `-n` only prints what would be done. `allow line` writes a comment only
   where it is certainly a comment: for known file types (shell, Python,
-  YAML, TOML, Go/C-like, Lua, nginx), never inside a string, a comment, a
-  YAML block or multi-line scalar, a heredoc or a raw string, never on a
-  `#!` line or in a tool's directive comment. In shell, Rust and nginx,
-  where strings may run over lines, every line up to the marked one must
-  close its quotes however a backslash is read. JSON, INI, `.env`,
-  Dockerfiles, SQL, XML/HTML, Ruby and Perl are refused: use `allow fp`. `ignore` refuses a file committed in
-  `HEAD` without `-history`: ignoring it does not take the value out of the
-  history.
+  YAML, TOML, Go/C/Rust/JVM/C#, Lua, nginx), never inside a string, a
+  comment, a YAML block or multi-line scalar, a heredoc or a raw string,
+  never on a `#!` line or in a tool's directive comment. In shell, Rust
+  and nginx, where strings may run over lines, every line up to the
+  marked one must close its quotes however a backslash is read. JSON,
+  INI, `.env`, Dockerfiles, SQL, XML/HTML, JS/TS, Ruby and Perl are
+  refused: use `allow fp`. `ignore` refuses a file committed in `HEAD`
+  without `-history`, a directory, and a file whose staged version
+  differs from both the file and `HEAD`: ignoring it does not take the
+  value out of the history.
 - `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary
   word.
 - Lock files, `*.min.js` and `*.map` are always skipped

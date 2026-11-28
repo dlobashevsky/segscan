@@ -57,10 +57,11 @@ func TestMarkLine(t *testing.T) {
 		{"a.sh", "x=1 # shellcheck disable=SC2034\n", 1, ""}, // a tool's directive
 		{"a.yaml", "k: v # yamllint disable-line\n", 1, ""},
 		{"a.py", "k = 1  # noqa: E501\n", 1, ""},
-		{"a.sql", "SELECT `first\nsecret\nlast`;\n", 2, ""},                   // MySQL identifier over lines
-		{"a.sh", "x=$'first\\' quote\nsecret\nlast'\n", 2, ""},                // ANSI-C quoting
-		{"a.js", "console.log(x);// eslint-disable-line no-console\n", 1, ""}, // directive without a space
-		{"a.js", "f(x);// plain note\n", 1, "f(x);// plain note segscan:allow\n"},
+		{"a.sql", "SELECT `first\nsecret\nlast`;\n", 2, ""},    // MySQL identifier over lines
+		{"a.sh", "x=$'first\\' quote\nsecret\nlast'\n", 2, ""}, // ANSI-C quoting
+		{"a.go", "f(x);// nolint:errcheck\n", 1, ""},           // directive without a space
+		{"a.go", "f(x);// plain note\n", 1, "f(x);// plain note segscan:allow\n"},
+		{"a.js", "const a = <div>\nsecret\n</div>;\n", 2, ""}, // JS/TS: not offered (JSX)
 		{"a.sh", "echo 'it''s'\n", 1, "echo 'it''s' # segscan:allow\n"},
 		{"a.go", "u := \"server\"\n", 1, "u := \"server\" // segscan:allow\n"},
 		{"a.sql", "insert into t values ($p$a\nsecret\n$p$);\n", 2, ""}, // tagged dollar quote

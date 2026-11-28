@@ -35,11 +35,9 @@ var (
 	stylePy    = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleTOML  = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleYAML  = commentStyle{start: "#", quotes: `"'`, yaml: true}
-	// C-like languages, each with its multi-line strings: Go and JS raw
-	// and template strings, C++ R"(...)", Rust r#"..."#, the """ text
+	// C-like languages, each with its multi-line strings: Go raw strings, C++ R"(...)", Rust r#"..."#, the """ text
 	// blocks of Java, Kotlin, Scala, Swift and C# 11, C# @"...".
 	styleGo = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
-	styleJS = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
 	styleC  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
 	// Rust: ordinary strings may span lines too
 	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, spanLines: true, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
@@ -52,7 +50,8 @@ var (
 // the marker is not offered for (JSON, INI, .env, Dockerfile, unknown...).
 // SQL (bracketed and backtick identifiers, dollar, E and q strings, by dialect)
 // and XML/HTML (markup mixed with text) are not offered either: too many
-// ways for the end of a line to be inside a value. Ruby and Perl likewise.
+// ways for the end of a line to be inside a value. Ruby, Perl and JS/TS
+// (JSX child text is not code) likewise.
 func styleFor(p string) (commentStyle, bool) {
 	base := path.Base(p)
 	switch strings.ToLower(path.Ext(base)) {
@@ -66,8 +65,6 @@ func styleFor(p string) (commentStyle, bool) {
 		return styleTOML, true
 	case ".go":
 		return styleGo, true
-	case ".js", ".mjs", ".ts":
-		return styleJS, true
 	case ".c", ".h", ".cc", ".cpp", ".hpp":
 		return styleC, true
 	case ".rs":

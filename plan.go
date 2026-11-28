@@ -147,6 +147,7 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 	// 2. The allowlist and .gitignore.
 	var allowLines, ignoreLines []string
 	var untrack []action
+	untracked := map[string]bool{}
 	for _, a := range acts {
 		switch a.Kind {
 		case actAllowFP:
@@ -189,7 +190,8 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				r.Warn = append(r.Warn, a.File+": has a .sec/manifest entry; check will miss the file in a clean clone")
 			}
 			ignoreLines = append(ignoreLines, "/"+gitignoreEscape(a.File))
-			if tracked {
+			if tracked && !untracked[a.File] {
+				untracked[a.File] = true // a file named twice leaves the index once
 				untrack = append(untrack, a)
 			}
 		}
