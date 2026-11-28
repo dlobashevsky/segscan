@@ -31,7 +31,8 @@ type commentStyle struct {
 
 var (
 	styleNginx = commentStyle{start: "#", quotes: `"'`, spanLines: true}
-	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, spanLines: true}
+	// bash/zsh $'...' escapes \' and may span lines: read single quotes both ways
+	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, spanLines: true, escSingle: true}
 	stylePy    = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleTOML  = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleYAML  = commentStyle{start: "#", quotes: `"'`, yaml: true}
@@ -46,7 +47,7 @@ var (
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	// PostgreSQL dollar quotes: $$...$$ and $tag$...$tag$
-	styleSQL = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"/*"}, spanLines: true, escSingle: true,
+	styleSQL = commentStyle{start: "--", quotes: "'\"`", blockOpen: []string{"/*"}, spanLines: true, escSingle: true,
 		rawOpen: []*regexp.Regexp{regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)?\$`)}}
 	styleLua = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
 	styleXML = commentStyle{start: "<!--", end: "-->", xml: true}
@@ -217,11 +218,20 @@ func scanQuotes(st commentStyle, body []byte, esc bool) byte {
 			}
 		case strings.IndexByte(st.quotes, c) >= 0:
 			q = c
-		case bytes.HasPrefix(body[k:], []byte(st.start)) && (k == 0 || body[k-1] == ' ' || body[k-1] == '\t'):
+		case st.commentAt(body, k):
 			return 0
 		}
 	}
 	return q
+}
+
+// commentAt reports a line comment starting at body[k]. "#" starts one
+// only at a word start (shell, YAML: a#b is a word); "//" and "--" anywhere.
+func (st commentStyle) commentAt(body []byte, k int) bool {
+	if !bytes.HasPrefix(body[k:], []byte(st.start)) {
+		return false
+	}
+	return st.start != "#" || k == 0 || body[k-1] == ' ' || body[k-1] == '\t'
 }
 
 // hasLineComment reports whether the line already ends in a line comment.
@@ -238,7 +248,7 @@ func hasLineComment(st commentStyle, body []byte) bool {
 			}
 		case strings.IndexByte(st.quotes, c) >= 0:
 			q = c
-		case bytes.HasPrefix(body[k:], []byte(st.start)) && (k == 0 || body[k-1] == ' ' || body[k-1] == '\t'):
+		case st.commentAt(body, k):
 			return true
 		}
 	}

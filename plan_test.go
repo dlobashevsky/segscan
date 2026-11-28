@@ -15,8 +15,9 @@ func TestCLIAllowCommands(t *testing.T) {
 	r.write("we*ird.txt", "token = "+planSecret+"x\n")
 	r.write("a b.txt", "token = "+planSecret+"y\n")
 
-	// -n writes nothing.
+	// -n writes nothing, before or after the operands.
 	r.must("segscan", "allow", "line", "-n", "app.yaml:2")
+	r.must("segscan", "allow", "line", "app.yaml:2", "-n")
 	if strings.Contains(r.read("app.yaml"), "segscan:allow") {
 		t.Fatal("-n wrote the file")
 	}
@@ -97,6 +98,10 @@ func TestCLIIgnore(t *testing.T) {
 		t.Errorf(".gitignore changed for a directory")
 	}
 
+	r.must("segscan", "ignore", "new.txt", "-n")
+	if _, err := os.Stat(filepath.Join(r.dir, "-n")); err == nil || strings.Contains(r.read(".gitignore"), "new.txt") {
+		t.Fatalf("ignore FILE -n wrote")
+	}
 	r.must("segscan", "ignore", "new.txt", "staged.txt")
 	if got := r.read(".gitignore"); got != "/new.txt\n/staged.txt\n" {
 		t.Errorf(".gitignore: %q", got)

@@ -27,10 +27,10 @@ func cmdAllow(args []string) {
 	what := args[0]
 	fs, c := flags("allow " + what)
 	dry := fs.Bool("n", false, "only print what would be done")
-	fs.Parse(args[1:])
+	operands := parseInterspersed(fs, args[1:])
 	c.finish(fs)
 	p := newPlan(c)
-	for _, a := range fs.Args() {
+	for _, a := range operands {
 		switch what {
 		case "fp":
 			fp := strings.ToLower(a)
@@ -56,16 +56,40 @@ func cmdIgnore(args []string) {
 	fs := flag.NewFlagSet("ignore", flag.ExitOnError)
 	dry := fs.Bool("n", false, "only print what would be done")
 	history := fs.Bool("history", false, "also for a file committed in HEAD (its content stays in the history)")
-	fs.Parse(args)
+	operands := parseInterspersed(fs, args)
 	top := repoTop()
 	if top == "" {
 		die(fmt.Errorf("ignore: not a git repository"))
 	}
 	p := &plan{top: top}
-	for _, a := range fs.Args() {
+	for _, a := range operands {
 		p.actions = append(p.actions, action{Kind: actIgnore, File: mustRepoFile(a), History: *history})
 	}
 	runPlan(p, *dry)
+}
+
+// parseInterspersed parses flags before, between and after the operands
+// (the flag package stops at the first operand, so "ignore FILE -n" would
+// take -n for a file and do it for real). "--" ends the flags: a name
+// starting with "-" goes after it.
+func parseInterspersed(fs *flag.FlagSet, args []string) []string {
+	var rest []string
+	for i, a := range args {
+		if a == "--" {
+			args, rest = args[:i], args[i+1:]
+			break
+		}
+	}
+	var operands []string
+	for {
+		fs.Parse(args)
+		args = fs.Args()
+		if len(args) == 0 {
+			return append(operands, rest...)
+		}
+		operands = append(operands, args[0])
+		args = args[1:]
+	}
 }
 
 // newPlan starts a plan in the current repository, with the allowlist the
