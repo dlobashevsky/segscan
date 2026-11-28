@@ -121,7 +121,7 @@ A change made on a node by hand comes back with
 | `config` | settings (section 6) |
 | `names` | key names and uuids; never values (section 5) |
 | `manifest` | type, mode, owner, group of every file under a node root (section 7) |
-| `allow` | allowlist of the statistical scan: fingerprints and `path:glob` |
+| `allow` | allowlist of the statistical scan: fingerprints (everywhere or with `path:glob`) and `path:glob` |
 | `segscan.model` | the trained model (optional, from `segscan train`) |
 | `hooks/pre-commit`, `hooks/pre-push` | the hooks (section 12) |
 | `.gitignore` | ignores `.sec/keys`, an optional link to the keystore |
@@ -385,7 +385,7 @@ code 0 clean, 1 problems, 2 error.
 | `names` | unknown key, wrong uuid, key used outside its scope, a bad line in `.sec/names` | `key add`, fix the uuid, widen `-scope` |
 | `manifest` | missing or stale entry, wrong type, bad line in `.sec/manifest` (section 7) | `manifest fix`, edit the manifest |
 | `forbidden` | a path that matches `forbid`, `.sec/keys`, or lies in the keystore | remove the file |
-| `private_key` | a `-----BEGIN ... PRIVATE KEY-----` block, also in binary files and in `.sec/` | remove the key; a deliberate test key goes into `.sec/allow` by fp |
+| `private_key` | a `-----BEGIN ... PRIVATE KEY-----` block, also in binary files and in `.sec/` | remove the key; a deliberate test key goes into `.sec/allow` by fp with `path:` of its file (the fp is the same for every key with that marker) |
 | `config` | an invalid `.sec/config`; a `.sec/` file that is not a regular file; `.sec` not a directory; a keystore inside the repository | fix the file |
 | `known_value` | check 6, only with the keystore: a value of a key (current or retired) or of a secret file is in the file, in some form; or a binary file could not be read completely | remove the value and rotate it if it was pushed; a harmless binary goes into `.sec/allow` as `path:<glob>` |
 
@@ -464,7 +464,14 @@ structured, validated by `check`, and full of paths and uuids.
 
 False positives:
 
-- add the `fp` column of the finding to `.sec/allow`, one per line;
+- add the `fp` column of the finding to `.sec/allow`, one per line, or
+  run `segscan allow fp FP` (also `allow path FILE` and `segscan ignore
+  FILE`; see the README);
+- `fp path:<glob>...` allows the fingerprint only in the files the globs
+  cover (the same globs as below): `afb85ea41001 path:/nodes/*/nginx.conf`.
+  The same value in another file is still reported. `segscan allow fp
+  -file FILE FP` or `-path GLOB` writes it. `check` honours it for private
+  keys too: a test key allowed in its own file, not every key;
 - `path:<glob>` in `.sec/allow` skips whole files, the way `.gitignore`
   does. The glob is matched against the path from the repository top,
   wherever you run segscan and however you name the files (`scan .`,
@@ -499,7 +506,8 @@ clear, and the scan with that model no longer reports it. Check 6 above
 catches only values the keystore already knows. Hence:
 
 - train with `-guard`: a fragment inside a finding of the built-in model
-  is not learnt unless the finding's fp is in `.sec/allow`. It uses the
+  is not learnt unless the finding's fp is in `.sec/allow` (for an fp
+  with `path:` globs, only from the files they cover). It uses the
   default thresholds, not `scan_bpc` or `scan_minlen` (`-guard-bpc N`:
   only findings of at least N bits per char count). Review the findings of
   the built-in model first, or the guarded model keeps reporting them;

@@ -65,7 +65,28 @@ about 3.5-4.5.
 
 - `.segscan-allow` in the repository root: one `fp` per line, or `path:glob`
   to skip files. `#` starts a comment.
-- `segscan:allow` on the line itself: the line is not scanned.
+- `fp path:glob...`: that fingerprint only in the files the globs cover
+  (same glob rules as `path:`), so the same value elsewhere is still
+  reported: `afb85ea41001 path:/nodes/*/nginx.conf`. Anything else after
+  the fp makes the line count for nothing, so a typo never allows the fp
+  everywhere.
+- `segscan:allow` on the line itself: the line is not scanned. segscan
+  never writes it: only you know whether a comment there is a comment
+  in that file's language.
+- The same from the command line, without editing by hand:
+
+      segscan allow fp FP...                # fingerprints, with a "# file:line" comment
+      segscan allow fp -file FILE FP...     # FP path:/FILE, escaped: in that file only
+      segscan allow fp -path GLOB FP...     # FP path:GLOB
+      segscan allow path FILE...            # path:/FILE, escaped
+      segscan ignore FILE...                # /FILE in .gitignore, and out of the index
+
+  `-n` only prints what would be done. None of them changes the files
+  themselves. `ignore` refuses a file committed in `HEAD` without
+  `-history` (ignoring it does not take the value out of the history), a
+  directory, a file whose staged version differs from both the file and
+  `HEAD`, and a file outside the sparse checkout. A `.gitignore` or
+  allowlist that is a symlink is never written to.
 - `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary
   word.
 - Lock files, `*.min.js` and `*.map` are always skipped

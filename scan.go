@@ -290,16 +290,24 @@ type fileScan struct {
 	allow *allowList
 	pem   pemState
 	out   func(Finding)
+	// rel: the repository path of the file being scanned, for "fp
+	// path:glob" lines, when the file name given is not one (scan of a
+	// path from another directory); "" takes the name as it is.
+	rel string
 }
 
 var allowMarker = []byte("segscan:allow")
 
 func (fs *fileScan) line(commit, file string, no int, line []byte) {
 	line = bytes.TrimRight(line, "\r")
+	rel := fs.rel
+	if rel == "" {
+		rel = file
+	}
 	skip, private := fs.pem.feed(line)
 	if private {
 		f := Finding{Commit: commit, File: file, Line: no, Col: 1, Text: string(line), Kind: kindPEM, Label: pemLabel(line)}
-		if !fs.allow.fp[f.FP()] {
+		if !fs.allow.allowFP(f.FP(), rel) {
 			fs.out(f)
 		}
 	}
@@ -308,7 +316,7 @@ func (fs *fileScan) line(commit, file string, no int, line []byte) {
 	}
 	fs.sc.Line(line, func(col int, text []byte, bits, excess float64) {
 		f := Finding{Commit: commit, File: file, Line: no, Col: col + 1, Text: string(text), Bits: bits, Excess: excess, Kind: kindEntropy}
-		if !fs.allow.fp[f.FP()] {
+		if !fs.allow.allowFP(f.FP(), rel) {
 			fs.out(f)
 		}
 	})

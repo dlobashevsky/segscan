@@ -24,6 +24,10 @@ const usage = `segscan - statistical secret scanner
                                         train a model (no paths: git ls-files)
   segscan model check [-m model] [-since REV]
                                         dictionary words of the model that look like keys
+  segscan allow fp [-file FILE | -path GLOB] FP... | allow path FILE... [-n]
+                                        fingerprints (everywhere or in some files), files -> allowlist
+  segscan ignore [-n] [-history] FILE...
+                                        files -> .gitignore, and out of the index
   segscan scan  [flags] [-scanall] [path...|-]
                                         scan files (in git: tracked and untracked, not
                                         ignored, not .sec/; -scanall: every file)
@@ -119,6 +123,11 @@ func (c *common) finish(fs *flag.FlagSet) {
 	}
 	top := secRoot()
 	if top == "" {
+		// .segscan-allow is the one at the repository top, from any
+		// directory: allow writes it there and scan reads it there.
+		if t := repoTop(); t != "" && !c.set["allow"] {
+			c.allow = filepath.Join(t, ".segscan-allow")
+		}
 		return
 	}
 	cfg, err := loadSecConfig(top)
@@ -215,6 +224,10 @@ func main() {
 		cmdImport(args)
 	case "model":
 		cmdModel(args)
+	case "allow":
+		cmdAllow(args)
+	case "ignore":
+		cmdIgnore(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -454,10 +467,14 @@ func train(files []string, allow *allowList, top, skip int, guard *trainGuardSca
 		t.addWords(data)
 	}
 	for _, f := range files {
-		if allow.skipPath(repoPath(f)) {
+		rel := repoPath(f)
+		if allow.skipPath(rel) {
 			continue
 		}
 		if data, ok := readText(f); ok {
+			if guard != nil {
+				guard.file = rel
+			}
 			t.addFile(data)
 		}
 	}
@@ -694,10 +711,12 @@ func cmdScan(args []string) {
 		s.data("<stdin>", data)
 	} else {
 		for _, f := range scanFiles(fs.Args(), *scanall) {
-			if allow.skipPath(repoPath(f)) {
+			rel := repoPath(f)
+			if allow.skipPath(rel) {
 				continue
 			}
 			if data, ok := readText(f); ok {
+				s.rel = rel
 				s.data(f, data)
 			}
 		}

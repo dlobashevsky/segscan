@@ -130,11 +130,13 @@ var defaultExcludes = []string{
 
 type allowList struct {
 	fp    map[string]bool
+	fpIn  map[string][]string // "fp path:glob...": the fingerprint in those files only
 	paths []string
 	words map[string]bool // word:<w>, dictionary words model check accepts
 }
 
-// loadAllow reads the file: each line is a fingerprint (fp) or "path:glob"; # starts a comment.
+// loadAllow reads the file: each line is a fingerprint (fp), an fp with
+// path:globs, or "path:glob"; # starts a comment.
 func loadAllow(path string, defaults bool) *allowList {
 	a := &allowList{fp: map[string]bool{}}
 	if defaults {
@@ -165,10 +167,47 @@ func (a *allowList) add(data []byte) {
 				a.words = map[string]bool{}
 			}
 			a.words[strings.ToLower(w)] = true
+		} else if fp := strings.ToLower(f[0]); len(f) == 1 {
+			a.fp[fp] = true
 		} else {
-			a.fp[strings.ToLower(f[0])] = true
+			// fp path:glob...: only in the files the globs cover. Anything
+			// else after the fp leaves the line out: a typo must not turn
+			// a scoped line into one for the whole tree.
+			var globs []string
+			for _, x := range f[1:] {
+				g, ok := strings.CutPrefix(x, "path:")
+				if !ok || g == "" {
+					globs = nil
+					break
+				}
+				globs = append(globs, g)
+			}
+			if globs != nil {
+				if a.fpIn == nil {
+					a.fpIn = map[string][]string{}
+				}
+				a.fpIn[fp] = append(a.fpIn[fp], globs...)
+			}
 		}
 	}
+}
+
+// allowFP reports whether a finding with this fingerprint in the
+// repository path file is allowed: by a bare fp line, or by an fp line
+// whose globs cover the file ("" for no file: bare lines only).
+func (a *allowList) allowFP(fp, file string) bool {
+	if a.fp[fp] {
+		return true
+	}
+	if file == "" {
+		return false
+	}
+	for _, g := range a.fpIn[fp] {
+		if globCovers(g, file) {
+			return true
+		}
+	}
+	return false
 }
 
 // skipPath reports whether a path:<glob> line covers the repository path p,
@@ -177,36 +216,45 @@ func (a *allowList) add(data []byte) {
 // glob without "/" is matched against each name on the path, one with "/"
 // against the path from the repository top; "**" stands for any depth.
 func (a *allowList) skipPath(p string) bool {
+	for _, pat := range a.paths {
+		if globCovers(pat, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// globCovers reports whether one path: glob covers the repository path p
+// (see skipPath).
+func globCovers(pat, p string) bool {
 	p = cleanRel(p)
 	parts := strings.Split(p, "/")
-	for _, pat := range a.paths {
-		dirOnly := strings.HasSuffix(pat, "/")
-		// A leading "/" anchors the glob at the repository top, as in
-		// .gitignore: path:/data/ is data/ at the top only.
-		anchored := strings.HasPrefix(pat, "/")
-		pat = strings.TrimSuffix(cleanRel(strings.TrimLeft(pat, "/")), "/")
-		if pat == "" || pat == "." {
-			continue
+	dirOnly := strings.HasSuffix(pat, "/")
+	// A leading "/" anchors the glob at the repository top, as in
+	// .gitignore: path:/data/ is data/ at the top only.
+	anchored := strings.HasPrefix(pat, "/")
+	pat = strings.TrimSuffix(cleanRel(strings.TrimLeft(pat, "/")), "/")
+	if pat == "" || pat == "." {
+		return false
+	}
+	for i := len(parts); i >= 1; i-- {
+		if dirOnly && i == len(parts) {
+			continue // a directory pattern never names the file itself
 		}
-		for i := len(parts); i >= 1; i-- {
-			if dirOnly && i == len(parts) {
-				continue // a directory pattern never names the file itself
-			}
-			cand := strings.Join(parts[:i], "/")
-			var ok bool
-			switch {
-			case strings.Contains(pat, "**"):
-				ok = matchPath(pat, cand)
-			// path.Match, not filepath.Match: these are slash paths on every
-			// platform, and on Windows filepath.Match would let * cross "/".
-			case anchored || strings.Contains(pat, "/"):
-				ok, _ = path.Match(pat, cand)
-			default:
-				ok, _ = path.Match(pat, parts[i-1])
-			}
-			if ok {
-				return true
-			}
+		cand := strings.Join(parts[:i], "/")
+		var ok bool
+		switch {
+		case strings.Contains(pat, "**"):
+			ok = matchPath(pat, cand)
+		// path.Match, not filepath.Match: these are slash paths on every
+		// platform, and on Windows filepath.Match would let * cross "/".
+		case anchored || strings.Contains(pat, "/"):
+			ok, _ = path.Match(pat, cand)
+		default:
+			ok, _ = path.Match(pat, parts[i-1])
+		}
+		if ok {
+			return true
 		}
 	}
 	return false
