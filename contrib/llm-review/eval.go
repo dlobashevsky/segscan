@@ -24,7 +24,7 @@ func cmdEval(args []string, in io.Reader, out io.Writer) int {
 		fmt.Fprint(os.Stderr, "llm-review eval -allow FILE < scored.jsonl\n\n"+
 			"Scan without the fp lines of the allowlist (keep its path: lines), score, then:\n\n"+
 			"  grep '^[[:space:]]*path:' .segscan-allow > paths.allow\n"+
-			"  segscan scan -allow paths.allow -json | llm-review > scored.jsonl\n"+
+			"  segscan scan -allow paths.allow -json . | llm-review > scored.jsonl\n"+
 			"  llm-review eval -allow .segscan-allow < scored.jsonl\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
