@@ -24,7 +24,9 @@ const usage = `segscan - statistical secret scanner
                                         train a model (no paths: git ls-files)
   segscan model check [-m model] [-since REV]
                                         dictionary words of the model that look like keys
-  segscan scan  [flags] [path...|-]     scan files (no paths: git ls-files)
+  segscan scan  [flags] [-scanall] [path...|-]
+                                        scan files (in git: tracked and untracked, not
+                                        ignored, not .sec/; -scanall: every file)
   segscan diff  [flags]                 scan the added lines of a unified diff on stdin
                                         (git log -p --all -U0 | segscan diff)
   segscan hook  [flags]                 scan staged changes (for pre-commit)
@@ -303,21 +305,128 @@ func repoPath(f string) string {
 	if top == "" {
 		return cleanRel(f)
 	}
-	// Only the current directory is resolved: the name itself, a symlink
-	// in the repository included, stays the repository entry being scanned.
-	var abs string
-	if filepath.IsAbs(f) {
-		// An absolute path may reach the checkout through an alias:
-		// resolve its directory, keep its name.
-		abs = filepath.Join(canonical(filepath.Dir(f)), filepath.Base(f))
-	} else {
-		abs = filepath.Join(repoCwd(), f)
-	}
+	// The directory part is resolved (an absolute path may reach the
+	// checkout through an alias); the name itself, a symlink in the
+	// repository included, stays the repository entry being scanned.
+	abs := physAbs(f)
 	rel, err := filepath.Rel(top, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return cleanRel(f)
 	}
 	return cleanRel(rel)
+}
+
+// scanFiles is the file set of segscan scan. In a git repository it is
+// what git would offer to commit, the set check uses: tracked and untracked
+// files without ignored ones (git ls-files -co --exclude-standard), and
+// without .sec/. Given paths limit that set; a file named explicitly is
+// read even if git ignores it. With -scanall, outside a repository and for
+// paths outside it, the paths are walked as they are (expand).
+func scanFiles(paths []string, all bool) []string {
+	if all || repoTop() == "" {
+		if len(paths) == 0 {
+			if repoTop() == "" {
+				die(fmt.Errorf("no paths given and not a git repository"))
+			}
+			paths = []string{"."}
+		}
+		return expand(paths)
+	}
+	var inside, outside []string
+	for _, p := range paths {
+		if rel, ok := cwdRelInRepo(p); ok {
+			if _, err := os.Stat(p); err != nil {
+				fmt.Fprintln(os.Stderr, "segscan:", err)
+				continue
+			}
+			inside = append(inside, rel)
+		} else {
+			outside = append(outside, p)
+		}
+	}
+	var files []string
+	if len(paths) == 0 || len(inside) > 0 {
+		args := []string{"--literal-pathspecs", "-c", "core.quotepath=off", "ls-files", "-co", "--exclude-standard", "-z"}
+		if len(inside) > 0 {
+			args = append(append(args, "--"), inside...)
+		}
+		out, err := exec.Command("git", args...).Output()
+		if err != nil {
+			die(fmt.Errorf("git ls-files: %v", err))
+		}
+		seen := map[string]bool{}
+		for _, f := range bytes.Split(out, []byte{0}) {
+			if len(f) == 0 {
+				continue
+			}
+			p := string(f)
+			if rp := repoPath(p); rp != secDir && !strings.HasPrefix(rp, secDir+"/") {
+				files = append(files, p)
+				seen[filepath.Clean(p)] = true
+			}
+		}
+		for _, p := range inside {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() && !seen[filepath.Clean(p)] {
+				files = append(files, p) // named explicitly: read even if ignored or in .sec/
+			}
+		}
+	}
+	return append(files, expand(outside)...)
+}
+
+// physAbs makes p absolute. With a ".." in it, the directory part is
+// resolved the way the system does, component by component, so that ".."
+// after a symlinked directory goes up from its target (filepath.Join would
+// drop both lexically). The last component keeps its own name: a symlink in
+// the repository is the entry being scanned.
+func physAbs(p string) string {
+	if !hasDotDot(p) {
+		// No ".." to misplace: resolve only an absolute path's directory
+		// (an alias of the checkout); a relative one stays as written.
+		if filepath.IsAbs(p) {
+			return filepath.Join(canonical(filepath.Dir(p)), filepath.Base(p))
+		}
+		return filepath.Join(repoCwd(), p)
+	}
+	raw := p
+	if !filepath.IsAbs(p) {
+		raw = repoCwd() + string(filepath.Separator) + p
+	}
+	dir, base := raw, ""
+	if i := strings.LastIndexByte(raw, filepath.Separator); i >= 0 {
+		dir, base = raw[:i], raw[i+1:]
+	}
+	if base == "" || base == "." || base == ".." {
+		return canonical(raw)
+	}
+	return filepath.Join(canonical(dir), base)
+}
+
+func hasDotDot(p string) bool {
+	for _, c := range strings.Split(p, string(filepath.Separator)) {
+		if c == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// cwdRelInRepo reports whether p lies inside the current repository, and
+// gives it relative to the current directory (for a git pathspec).
+func cwdRelInRepo(p string) (string, bool) {
+	top := repoTop()
+	if top == "" {
+		return "", false
+	}
+	abs := physAbs(p)
+	rel, err := filepath.Rel(top, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	if r, err := filepath.Rel(repoCwd(), abs); err == nil {
+		return r, true
+	}
+	return "", false
 }
 
 func filesOrGit(paths []string) []string {
@@ -570,6 +679,7 @@ func (p *printer) print(f *Finding) {
 
 func cmdScan(args []string) {
 	fs, c := flags("scan")
+	scanall := fs.Bool("scanall", false, "walk the paths as they are: also ignored files and .sec/ (default in git: what git would commit)")
 	fs.Parse(args)
 	c.finish(fs)
 	m := mustModel(c)
@@ -583,7 +693,7 @@ func cmdScan(args []string) {
 		}
 		s.data("<stdin>", data)
 	} else {
-		for _, f := range filesOrGit(fs.Args()) {
+		for _, f := range scanFiles(fs.Args(), *scanall) {
 			if allow.skipPath(repoPath(f)) {
 				continue
 			}

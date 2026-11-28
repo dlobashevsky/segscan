@@ -6,12 +6,11 @@ not a filter in the hooks: run it yourself, on demand.
 
     segscan scan -json . | llm-review -sort > scored.jsonl
 
-llm-review scores whatever segscan prints, so the paths decide what gets
-reviewed. Without paths, `segscan scan` reads only the files git tracks
-(`git ls-files`). With `.` it walks the directory, so files not yet added
-and ignored ones are read too; it does not descend into `.git` and
-`node_modules`. On a tree with new, uncommitted files the two can differ a
-lot. Either way segscan's own exclusions still apply: `path:` lines of the
+llm-review scores whatever segscan prints, so segscan's file set decides
+what gets reviewed. In a git repository `segscan scan` (with `.` or without
+paths) reads what git would commit: tracked files and files not yet added,
+but not ignored ones and not `.sec/`. `-scanall` walks everything except
+`.git/` and `node_modules/`. Either way segscan's own exclusions still apply: `path:` lines of the
 allowlist, lock files, `*.min.js`, `*.map`, binary files, files over 8 MiB
 and anything that is not a regular file (see "False positives" and "What it
 does not see" in the [segscan README](../../README.md)). A threshold in
