@@ -30,12 +30,15 @@ type commentStyle struct {
 	// \u000a a newline); C translates trigraphs (??/ is a backslash, so
 	// "??/" at the end of a line continues it).
 	refuse []string
+	// shell: ${...} and $((...)) may run over lines, and a # inside them
+	// is text, not a comment
+	shellExp bool
 }
 
 var (
 	styleNginx = commentStyle{start: "#", quotes: `"'`}
 	// bash/zsh $'...' escapes \' and may span lines: read single quotes both ways
-	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, escSingle: true}
+	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, escSingle: true, shellExp: true}
 	stylePy    = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleTOML  = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleYAML  = commentStyle{start: "#", quotes: `"'`, yaml: true}
@@ -180,6 +183,12 @@ func unsafeLine(st commentStyle, lines [][]byte, i int) string {
 	switch {
 	case st.yaml:
 		return yamlUnsafe(lines, i)
+	case st.shellExp:
+		for k := 0; k <= i; k++ {
+			if shellExpOpen(bytes.TrimRight(lines[k], "\r\n")) {
+				return fmt.Sprintf("a ${...} or $((...)) left open on line %d", k+1)
+			}
+		}
 	}
 	// Every line from the top must close its own quotes, whether a
 	// backslash escapes ($'...' in bash and zsh, Lua's \z, C's \ at the
@@ -221,6 +230,30 @@ func scanQuotes(st commentStyle, body []byte, esc bool) byte {
 		}
 	}
 	return q
+}
+
+// shellExpOpen reports a line that leaves a ${...} or $((...)) open.
+// Braces count only inside a ${: a function body "f() {" may span lines.
+func shellExpOpen(l []byte) bool {
+	brace, arith := 0, 0
+	for k := 0; k < len(l); k++ {
+		switch {
+		case bytes.HasPrefix(l[k:], []byte("$((")):
+			arith++
+			k += 2
+		case arith > 0 && bytes.HasPrefix(l[k:], []byte("))")):
+			arith--
+			k++
+		case bytes.HasPrefix(l[k:], []byte("${")):
+			brace++
+			k++
+		case brace > 0 && l[k] == '{':
+			brace++
+		case brace > 0 && l[k] == '}':
+			brace--
+		}
+	}
+	return brace > 0 || arith > 0
 }
 
 // commentAt reports a line comment starting at body[k]. "#" starts one

@@ -27,8 +27,11 @@ func TestMarkLine(t *testing.T) {
 		{"a.yaml", "k: abc\n  def\n", 1, ""},     // multi-line plain scalar
 		{"a.yaml", "k: abc\n  def\n", 2, ""},     // its continuation
 		{"a.sh", "TOKEN=abc\n", 1, "TOKEN=abc # segscan:allow\n"},
-		{"a.sh", "echo \"a\nb\nc\"\n", 2, ""},   // inside a string spanning lines
-		{"a.sh", "echo \"a\nb\"\nX=1\n", 3, ""}, // after a string over two lines: in doubt, no
+		{"a.sh", "x=${foo:-\nsecret\n}\n", 2, ""},                                                 // inside ${...}
+		{"a.sh", "x=$((1 +\n2))\n", 2, ""},                                                        // inside $((...))
+		{"a.sh", "f() {\n  TOKEN=${A:-b}\n}\n", 2, "f() {\n  TOKEN=${A:-b} # segscan:allow\n}\n"}, // a function body is fine
+		{"a.sh", "echo \"a\nb\nc\"\n", 2, ""},                                                     // inside a string spanning lines
+		{"a.sh", "echo \"a\nb\"\nX=1\n", 3, ""},                                                   // after a string over two lines: in doubt, no
 		{"a.sh", "echo \"a b\"\nX=1\n", 2, "echo \"a b\"\nX=1 # segscan:allow\n"},
 		{"a.sh", "cat <<EOF\nsecret\nEOF\n", 2, ""}, // heredoc
 		{"a.sh", "a=1 \\\n  b=2\n", 1, ""},          // continued
