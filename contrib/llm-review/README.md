@@ -78,6 +78,13 @@ needs `-show`, since the default 10-char preview is not enough.
 The built-in instruction is in `llm.go` (`defaultSystem`). `-system FILE`
 replaces it; it must still ask for a one-word `yes` / `no` answer.
 
+Where a value stands does not make it harmless: the instruction counts a
+credential-like value as a secret also in a comment, in commented-out code,
+in documentation and in tests, and lets off only obvious placeholders
+(`changeme`, `${VAR}`, `xxxx`). Without that, a real password behind `#` got
+0.2 while segscan gave it 6 bits per char. A repository whose tests are full
+of made-up passwords says so with examples, below.
+
 `-examples FILE` adds few-shot examples, one per line:
 
     {"user": "file: conf/app.yaml\nstring: 24 bytes, 5.62 bits per char\nline: token: <candidate>...</candidate>", "answer": "yes"}
