@@ -67,6 +67,9 @@ about 3.5-4.5.
   (`-no-default-excludes` turns this off).
 - `-----BEGIN CERTIFICATE-----` blocks are skipped; a `PRIVATE KEY` block is
   always a finding.
+- [contrib/llm-review](contrib/llm-review/README.md) scores the findings with
+  a local LLM (llama.cpp on the CPU), to sort and thin the ones checked by
+  hand.
 
 ## How it works
 
