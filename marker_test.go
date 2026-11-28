@@ -30,7 +30,7 @@ func TestMarkLine(t *testing.T) {
 		{"a.go", "x := `abc\nkey\n`\n", 2, ""}, // raw string
 		{"a.go", "x := \"a // b\n", 1, ""},     // unterminated
 		{"a.rs", "fn f<'a>(x: &'a str) {}\n", 1, "fn f<'a>(x: &'a str) {} // segscan:allow\n"},
-		{"a.xml", "<pass>abc</pass>\n", 1, "<pass>abc</pass> <!-- segscan:allow -->\n"},
+		{"a.xml", "<pass>abc</pass>\n", 1, ""}, // XML, SQL: not offered
 		{"a.xml", "<a b=\"x\n y\">\n", 1, ""},
 		{"a.xml", "<v>\nabc\n</v>\n", 2, ""},
 		{"a.xml", "<![CDATA[\n<x>a</x>\n]]>\n", 2, ""},
@@ -64,16 +64,16 @@ func TestMarkLine(t *testing.T) {
 		{"a.sh", "echo 'it''s'\n", 1, "echo 'it''s' # segscan:allow\n"},
 		{"a.go", "u := \"server\"\n", 1, "u := \"server\" // segscan:allow\n"},
 		{"a.sql", "insert into t values ($p$a\nsecret\n$p$);\n", 2, ""}, // tagged dollar quote
-		{"a.sql", "select 1;\n", 1, "select 1; -- segscan:allow\n"},
+		{"a.sql", "select 1;\n", 1, ""},
 		{"a.rb", "s = \"a\nsecret\"\n", 2, ""}, // Ruby and Perl: not offered
 		{"a.pl", "my $s = 1;\n", 1, ""},
 		{"nginx/n.conf", "return 200 \"a\nsecret\nb\";\n", 2, ""},            // nginx strings span lines
 		{"a.sql", "insert into t values (E'it\\'s\nsecret\nend');\n", 2, ""}, // E'...' with \'
-		{"a.sql", "select 'a';\nselect 2;\n", 2, "select 'a';\nselect 2; -- segscan:allow\n"},
-		{"a.cs", "var s = @$\"a\nsecret\nb\";\n", 2, ""}, // @$"..."
-		{"a.cs", "var s = $@\"a\nsecret\nb\";\n", 2, ""}, // $@"..."
-		{"a.xml", "<!-- a > b\n<x>y</x>\n-->\n", 2, ""},  // inside a comment
-		{"a.xml", "<!-- c -->\n<x>y</x>\n", 2, "<!-- c -->\n<x>y</x> <!-- segscan:allow -->\n"},
+		{"a.sql", "SELECT [first\nsecret\nlast];\n", 2, ""},                  // bracketed identifier
+		{"a.cs", "var s = @$\"a\nsecret\nb\";\n", 2, ""},                     // @$"..."
+		{"a.cs", "var s = $@\"a\nsecret\nb\";\n", 2, ""},                     // $@"..."
+		{"a.xml", "<!-- a > b\n<x>y</x>\n-->\n", 2, ""},                      // inside a comment
+		{"a.xml", "<v>\nsecret >\n</v>\n", 2, ""},                            // > in text
 	} {
 		got, err := markLine(c.file, []byte(c.in), c.line)
 		switch {

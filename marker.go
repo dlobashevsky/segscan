@@ -23,10 +23,9 @@ type commentStyle struct {
 	// rawOpen: the same for constructs that need a pattern (a raw string
 	// prefix must start a token: r"..." yes, "user" no)
 	rawOpen   []*regexp.Regexp
-	spanLines bool // quoted strings may continue on the next line (shell, SQL)
-	escSingle bool // a backslash may escape inside single quotes too (SQL E'...')
+	spanLines bool // quoted strings may continue on the next line (shell, Rust, nginx)
+	escSingle bool // a backslash may escape inside single quotes too (shell $'...')
 	yaml      bool // YAML: quotes only open a scalar; block and multi-line scalars
-	xml       bool
 }
 
 var (
@@ -46,15 +45,14 @@ var (
 	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, spanLines: true, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
-	// PostgreSQL dollar quotes: $$...$$ and $tag$...$tag$
-	styleSQL = commentStyle{start: "--", quotes: "'\"`", blockOpen: []string{"/*"}, spanLines: true, escSingle: true,
-		rawOpen: []*regexp.Regexp{regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)?\$`)}}
-	styleLua = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
-	styleXML = commentStyle{start: "<!--", end: "-->", xml: true}
+	styleLua  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
 )
 
 // styleFor returns the comment style of a repository path, false for a type
 // the marker is not offered for (JSON, INI, .env, Dockerfile, unknown...).
+// SQL (bracketed and backtick identifiers, dollar, E and q strings, by dialect)
+// and XML/HTML (markup mixed with text) are not offered either: too many
+// ways for the end of a line to be inside a value. Ruby and Perl likewise.
 func styleFor(p string) (commentStyle, bool) {
 	base := path.Base(p)
 	switch strings.ToLower(path.Ext(base)) {
@@ -78,12 +76,8 @@ func styleFor(p string) (commentStyle, bool) {
 		return styleJVM, true
 	case ".cs":
 		return styleCS, true
-	case ".sql":
-		return styleSQL, true
 	case ".lua":
 		return styleLua, true
-	case ".xml", ".html", ".htm":
-		return styleXML, true
 	case ".conf":
 		// nginx allows a comment after any directive; other .conf formats
 		// are anybody's guess.
@@ -176,11 +170,9 @@ func unsafeLine(st commentStyle, lines [][]byte, i int) string {
 	switch {
 	case st.yaml:
 		return yamlUnsafe(lines, i)
-	case st.xml:
-		return xmlUnsafe(lines, i)
 	}
 	// Where strings may span lines, every line from the top must close its
-	// own quotes, whether a backslash escapes (E'...' in PostgreSQL, shell
+	// own quotes, whether a backslash escapes ($'...' in bash and zsh, shell
 	// double quotes) or not: a string left open anywhere above, or a line
 	// that reads two ways, and the marker is refused. Elsewhere a string
 	// ends with its line, and only the line itself counts.
@@ -203,7 +195,7 @@ func unsafeLine(st commentStyle, lines [][]byte, i int) string {
 // scanQuotes runs the quote state over one line and returns the quote
 // still open at its end (0: none). With esc a backslash escapes the next
 // character inside double quotes, and inside single quotes too where the
-// language has such strings (SQL E'...'); without, it is an ordinary one.
+// language has such strings (shell $'...'); without, it is an ordinary one.
 // A line comment outside quotes ends the line.
 func scanQuotes(st commentStyle, body []byte, esc bool) byte {
 	var q byte
@@ -317,7 +309,8 @@ func yamlKeyEnd(t []byte) int {
 }
 
 // yamlQuotedCloses reports whether a quoted scalar at the start of v closes
-// on the line (” escapes a single quote, \ escapes in double quotes).
+// on the line (a doubled single quote stands for one inside single
+// quotes; a backslash escapes inside double quotes).
 func yamlQuotedCloses(v []byte) bool {
 	q := v[0]
 	for k := 1; k < len(v); k++ {
@@ -365,41 +358,6 @@ func yamlBlockScalar(lines [][]byte, i int) string {
 				break
 			}
 		}
-	}
-	return ""
-}
-
-// xmlUnsafe: the line must end with a closed tag, outside CDATA, script
-// and style, so that a comment after it is between nodes.
-func xmlUnsafe(lines [][]byte, i int) string {
-	var before []byte
-	for k := 0; k < i; k++ {
-		before = append(before, lines[k]...)
-	}
-	low := bytes.ToLower(append(append([]byte{}, before...), lines[i]...))
-	if bytes.Count(low, []byte("<![cdata[")) > bytes.Count(low, []byte("]]>")) {
-		return "the line is inside CDATA"
-	}
-	if bytes.Count(low, []byte("<!--")) > bytes.Count(low, []byte("-->")) {
-		return "the line is inside a comment"
-	}
-	for _, tag := range []string{"script", "style"} {
-		if bytes.LastIndex(low, []byte("<"+tag)) > bytes.LastIndex(low, []byte("</"+tag)) {
-			return "the line is inside <" + tag + ">"
-		}
-	}
-	body := bytes.TrimRight(lines[i], "\r\n \t")
-	if !bytes.HasSuffix(body, []byte(">")) {
-		return "the line does not end with a tag"
-	}
-	// Inside an open tag spanning lines: the last '<' before the line has
-	// no '>' after it.
-	if lt := bytes.LastIndexByte(before, '<'); lt >= 0 && bytes.IndexByte(before[lt:], '>') < 0 {
-		return "the line is inside a tag"
-	}
-	// Quotes on the line must balance (an attribute value may hold '>').
-	if bytes.Count(body, []byte(`"`))%2 != 0 || bytes.Count(body, []byte(`'`))%2 != 0 {
-		return "the end of the line may be inside an attribute value"
 	}
 	return ""
 }
