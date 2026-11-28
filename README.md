@@ -13,9 +13,10 @@ No dependencies. The built-in model `base.model` is embedded into the binary.
 
 ## Usage
 
-    segscan scan                             # files tracked by git (git ls-files)
-    segscan scan .                           # the directory, untracked and ignored files too
-    segscan scan conf/ app.yaml              # selected paths
+    segscan scan                             # what git would commit: tracked and untracked files,
+                                             # not ignored ones, not .sec/
+    segscan scan conf/ app.yaml              # the same, under these paths
+    segscan scan -scanall .                  # every file, ignored ones and .sec/ too
     git log -p --all -U0 | segscan diff      # full history, unique findings
     segscan train -guard                     # repository model -> .git/segscan.model
     segscan model check                      # dictionary words of the model that look like keys
@@ -156,6 +157,8 @@ To add your own words (transliteration, internal abbreviations):
 - Secrets split by whitespace or quotes.
 - Binary files (a NUL in the first 8000 bytes skips the file) and files over
   8 MiB.
+- In a git repository, files git ignores and `.sec/`, unless named
+  explicitly or `-scanall` is given.
 
 ## Configuration repositories
 

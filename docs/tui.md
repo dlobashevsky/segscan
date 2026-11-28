@@ -27,8 +27,10 @@ In every mode the allowlist (`path:` lines and fingerprints), the default
 excludes and the limits of `readText` (binary files, files over 8 MiB,
 non-regular files) still apply.
 
-This changes `scan .`: today it walks the directory and also reads ignored
-files and `.sec/` (word lists, for example).
+A file named explicitly is read even if git ignores it.
+
+Implemented. Before, `scan` without paths read only the tracked files, and
+`scan .` walked the directory, ignored files and `.sec/` included.
 
 ## 2. Launch
 
