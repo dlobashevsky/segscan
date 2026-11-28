@@ -497,3 +497,28 @@ func TestTTYStopReader(t *testing.T) {
 		t.Errorf("after stopReader the reader took the input: left %q", buf[:n])
 	}
 }
+
+// A file action on the only shown file of an A mark leaves the A action for
+// the files where the allowlist hides the fingerprint; with no such file,
+// the file action covers it all.
+func TestTUIAUnderFileAction(t *testing.T) {
+	s := newTUIState(testRows())
+	fp := s.rows[1].fp // a.conf, both rows
+	s.hashes = map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc", "hidden.conf": "hh"}
+	keys(s, "home", "A", "I") // A, then I on a.conf
+	var got []string
+	for _, a := range s.planActions() {
+		got = append(got, fmt.Sprintf("%c %s %d %s", a.Kind, a.File, a.Line, a.FP))
+	}
+	if strings.Join(got, "|") != "I a.conf 0 " {
+		t.Errorf("no hidden file: %q", got)
+	}
+	s.fpFiles = map[string]map[string]int{fp: {"a.conf": 2, "hidden.conf": 1}}
+	got = nil
+	for _, a := range s.planActions() {
+		got = append(got, fmt.Sprintf("%c %s %d %s %v", a.Kind, a.File, a.Line, a.FP, a.Hashes))
+	}
+	if want := "I a.conf 0  map[]|A hidden.conf 0 " + fp + " map[a.conf:ha]"; strings.Join(got, "|") != want {
+		t.Errorf("hidden file:\n%q\nwant\n%q", strings.Join(got, "|"), want)
+	}
+}

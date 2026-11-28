@@ -122,7 +122,7 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				r.Skipped = append(r.Skipped, err.Error())
 				continue
 			}
-			if a.File != "" {
+			if a.File != "" && a.Line > 0 {
 				// where it was seen, never the text; a name with a newline
 				// or another control character is quoted, or it would end
 				// the comment and start a line of its own (path:...)

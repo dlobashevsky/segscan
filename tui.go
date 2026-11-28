@@ -560,6 +560,38 @@ func (s *tuiState) clearMarks() {
 	s.rebuild()
 }
 
+// globalAction is the action of an A mark: one fp line for every file
+// with the fingerprint, shown or hidden by the allowlist. It is left out
+// only when file actions (I, F) cover all those files. Its comment names
+// a file and line not under a file action where there is one; every file
+// with the fingerprint must still be as it was scanned.
+func (s *tuiState) globalAction(fp string) (action, bool) {
+	var rest []string
+	for _, f := range s.filesWithFP(fp) {
+		if s.fileMark[f] == 0 {
+			rest = append(rest, f)
+		}
+	}
+	if len(rest) == 0 {
+		return action{}, false
+	}
+	a := action{Kind: actAllowFP, FP: fp, File: rest[0]}
+	for _, r := range s.rows {
+		if r.fp == fp && s.fileMark[r.file] == 0 {
+			a.File, a.Line = r.file, r.f.Line
+			break
+		}
+	}
+	a.Hash = s.hashes[a.File]
+	a.Hashes = map[string]string{}
+	for _, f := range s.filesWithFP(fp) {
+		if f != a.File {
+			a.Hashes[f] = s.hashes[f]
+		}
+	}
+	return a, true
+}
+
 // planActions turns the marks into actions; nothing is written here.
 func (s *tuiState) planActions() []action {
 	var out []action
@@ -568,20 +600,14 @@ func (s *tuiState) planActions() []action {
 	}
 	done := map[string]bool{}
 	for _, r := range s.rows {
-		if s.fileMark[r.file] != 0 {
-			continue // the file action covers it
-		}
 		if s.fpMark[r.fp] && !done[r.fp] {
 			done[r.fp] = true
-			// Everywhere: every file with the fingerprint must still be
-			// as it was scanned.
-			all := map[string]string{}
-			for _, f := range s.filesWithFP(r.fp) {
-				if f != r.file {
-					all[f] = s.hashes[f]
-				}
+			if a, ok := s.globalAction(r.fp); ok {
+				out = append(out, a)
 			}
-			out = append(out, action{Kind: actAllowFP, FP: r.fp, File: r.file, Line: r.f.Line, Hash: s.hashes[r.file], Hashes: all})
+		}
+		if s.fileMark[r.file] != 0 {
+			continue // the file action covers it
 		}
 		if k := fpHereKey(r.fp, r.file); s.fpHere[k] && !s.fpMark[r.fp] && !done[k] {
 			done[k] = true
