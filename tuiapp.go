@@ -437,15 +437,28 @@ func (a *tuiApp) run() {
 		switch {
 		case a.s.quit:
 			acts := a.s.planActions()
-			a.t.close()
 			if a.s.applyOnQuit && len(acts) > 0 {
+				// Applied with the screen still ours: on an error the
+				// session stays, with its marks, as after w.
 				p := &plan{top: a.top, allowPath: a.allowPath, actions: acts}
 				r, err := p.apply(false)
-				printApply(r, err)
-				for _, l := range a.check() { // as after w
+				if err != nil {
+					lines := append(applyLines(r), "error: "+err.Error(), "",
+						"the marks are kept: fix the error, then save (w) or quit (q) again")
+					a.s.quit, a.s.applyOnQuit = false, false
+					a.scan()
+					a.s.dialog = &tuiDialog{title: "Not saved", lines: lines, keys: "any key", on: func(*tuiState, string) bool { return true }}
+					continue
+				}
+				check := a.check() // as after w
+				a.t.close()
+				printApply(r, nil)
+				for _, l := range check {
 					fmt.Println(show(l))
 				}
+				return
 			}
+			a.t.close()
 			return
 		case a.s.saveNow:
 			a.s.saveNow = false
@@ -672,7 +685,7 @@ func printApply(r applyResult, err error) {
 		fmt.Println(show(l)) // file names may hold control characters
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "segscan:", err)
+		fmt.Fprintln(os.Stderr, "segscan:", show(err.Error())) // it may name a file
 	}
 }
 
