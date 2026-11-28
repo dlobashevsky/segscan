@@ -77,7 +77,7 @@ about 3.5-4.5.
   where it is certainly a comment: for known file types (shell, Python,
   YAML, TOML, Go/C/Rust/JVM/C#, Lua, nginx), never inside a string, a
   comment, a YAML block or multi-line scalar, a heredoc or a raw string,
-  never on a `#!` line or in a tool's directive comment. In shell, Rust
+  never on a `#!` line or a line that already has a comment. In shell, Rust
   and nginx, where strings may run over lines, every line up to the
   marked one must close its quotes however a backslash is read. JSON,
   INI, `.env`, Dockerfiles, SQL, XML/HTML, JS/TS, Ruby and Perl are

@@ -14,7 +14,7 @@ func TestMarkLine(t *testing.T) {
 		{"a.yaml", "db:\n  password: abc123\n", 2, "db:\n  password: abc123 # segscan:allow\n"},
 		{"a.yaml", "k: \"a#b\"\n", 1, "k: \"a#b\" # segscan:allow\n"},
 		{"a.yaml", "name: don't\n", 1, "name: don't # segscan:allow\n"},
-		{"a.yaml", "k: v # note\n", 1, "k: v # note segscan:allow\n"},
+		{"a.yaml", "k: v # note\n", 1, ""},       // never into an existing comment
 		{"a.yaml", "k: \"abc\n  def\"\n", 1, ""}, // quoted scalar open at the end
 		{"a.yaml", "cert: |\n  ABC\n", 2, ""},    // block scalar
 		{"a.yaml", "cert: >-\n  ABC\n", 2, ""},   // folded block scalar
@@ -60,7 +60,11 @@ func TestMarkLine(t *testing.T) {
 		{"a.sql", "SELECT `first\nsecret\nlast`;\n", 2, ""},    // MySQL identifier over lines
 		{"a.sh", "x=$'first\\' quote\nsecret\nlast'\n", 2, ""}, // ANSI-C quoting
 		{"a.go", "f(x);// nolint:errcheck\n", 1, ""},           // directive without a space
-		{"a.go", "f(x);// plain note\n", 1, "f(x);// plain note segscan:allow\n"},
+		{"a.go", "f(x);// plain note\n", 1, ""},
+		{"a.go", "//line gen.go:10\n", 1, ""},                             // Go directive
+		{"a.yaml", "key: \"first\n  password: secret\n  last\"\n", 2, ""}, // inside a quoted scalar
+		{"a.yaml", "k: [a,\n  b: c]\n", 2, ""},                            // inside a flow sequence
+		{"a.yaml", "k: [a, b]\nx: y\n", 2, "k: [a, b]\nx: y # segscan:allow\n"},
 		{"a.js", "const a = <div>\nsecret\n</div>;\n", 2, ""}, // JS/TS: not offered (JSX)
 		{"a.sh", "echo 'it''s'\n", 1, "echo 'it''s' # segscan:allow\n"},
 		{"a.go", "u := \"server\"\n", 1, "u := \"server\" // segscan:allow\n"},

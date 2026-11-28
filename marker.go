@@ -85,10 +85,6 @@ func styleFor(p string) (commentStyle, bool) {
 	return commentStyle{}, false
 }
 
-// directiveRE: comments that tools read (linters, editors, encodings, build
-// constraints). A marker appended to one would become part of it.
-var directiveRE = regexp.MustCompile(`(?i)(shellcheck|yamllint|noqa|pylint|flake8|mypy|type:\s*ignore|eslint|prettier|nolint|go:|\+build|rubocop|isort|fmt:|vim?:|-\*-|coding[:=]|ex:|kate:)`)
-
 // markLine returns the file with the marker added to line no (1-based), or
 // why it cannot be done.
 func markLine(repoPath string, data []byte, no int) ([]byte, error) {
@@ -112,13 +108,14 @@ func markLine(repoPath string, data []byte, no int) ([]byte, error) {
 	if why := unsafeLine(st, lines, no-1); why != "" {
 		return nil, fmt.Errorf("%s:%d: %s", repoPath, no, why)
 	}
-	if st.end == "" && hasLineComment(st, body) && directiveRE.Match(body) {
-		return nil, fmt.Errorf("%s:%d: the comment on the line is read by a tool; text added to it could change what it says", repoPath, no)
+	// Never append to a comment already on the line: compilers, linters,
+	// editors and interpreters read many of them (//line, //go:, noqa,
+	// shellcheck, modelines...), and added text changes what they say.
+	if hasLineComment(st, body) {
+		return nil, fmt.Errorf("%s:%d: the line already has a comment; text added to it could change what it says (use the fingerprint)", repoPath, no)
 	}
 	var add string
-	if st.end == "" && hasLineComment(st, body) {
-		add = " segscan:allow" // already inside a comment at the end
-	} else if st.end != "" {
+	if st.end != "" {
 		add = " " + st.start + " segscan:allow " + st.end
 	} else {
 		add = " " + st.start + " segscan:allow"
@@ -253,6 +250,16 @@ func yamlUnsafe(lines [][]byte, i int) string {
 	if why := yamlBlockScalar(lines, i); why != "" {
 		return why
 	}
+	// A quoted scalar or a flow collection ([...], {...}) left open on any
+	// line so far may still be open here, whatever this line looks like.
+	for k := 0; k <= i; k++ {
+		if why := yamlOpensLine(bytes.TrimRight(lines[k], "\r\n")); why != "" {
+			if k == i {
+				return why
+			}
+			return fmt.Sprintf("line %d: %s", k+1, why)
+		}
+	}
 	body := bytes.TrimRight(lines[i], "\r\n")
 	t := bytes.TrimSpace(body)
 	if t[0] == '#' {
@@ -287,6 +294,39 @@ func yamlUnsafe(lines [][]byte, i int) string {
 		}
 	}
 	return ""
+}
+
+// yamlOpensLine reports a line whose value starts a quoted scalar that does
+// not close on it, or opens more [ { than it closes.
+func yamlOpensLine(l []byte) string {
+	t := bytes.TrimSpace(l)
+	if len(t) == 0 || t[0] == '#' {
+		return ""
+	}
+	val := t
+	for bytes.HasPrefix(val, []byte("- ")) {
+		val = bytes.TrimSpace(val[2:])
+	}
+	if k := yamlKeyEnd(val); k >= 0 {
+		val = bytes.TrimSpace(val[k:])
+	}
+	if len(val) > 0 && (val[0] == '"' || val[0] == '\'') && !yamlQuotedCloses(val) {
+		return "a quoted YAML scalar runs over lines"
+	}
+	if len(val) > 0 && (val[0] == '[' || val[0] == '{') {
+		if c := yamlCut(val); bytes.Count(c, []byte("[")) != bytes.Count(c, []byte("]")) || bytes.Count(c, []byte("{")) != bytes.Count(c, []byte("}")) {
+			return "a YAML flow collection runs over lines"
+		}
+	}
+	return ""
+}
+
+// yamlCut drops a trailing comment from a value.
+func yamlCut(v []byte) []byte {
+	if c := bytes.Index(v, []byte(" #")); c >= 0 {
+		return v[:c]
+	}
+	return v
 }
 
 // yamlKeyEnd returns the offset after "key:" at the start of t, or -1.
