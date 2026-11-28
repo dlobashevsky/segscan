@@ -23,15 +23,14 @@ type commentStyle struct {
 	// rawOpen: the same for constructs that need a pattern (a raw string
 	// prefix must start a token: r"..." yes, "user" no)
 	rawOpen   []*regexp.Regexp
-	spanLines bool // quoted strings may continue on the next line (shell, Rust, nginx)
 	escSingle bool // a backslash may escape inside single quotes too (shell $'...')
 	yaml      bool // YAML: quotes only open a scalar; block and multi-line scalars
 }
 
 var (
-	styleNginx = commentStyle{start: "#", quotes: `"'`, spanLines: true}
+	styleNginx = commentStyle{start: "#", quotes: `"'`}
 	// bash/zsh $'...' escapes \' and may span lines: read single quotes both ways
-	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, spanLines: true, escSingle: true}
+	styleShell = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{"<<"}, escSingle: true}
 	stylePy    = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleTOML  = commentStyle{start: "#", quotes: `"'`, blockOpen: []string{`"""`, `'''`}}
 	styleYAML  = commentStyle{start: "#", quotes: `"'`, yaml: true}
@@ -40,7 +39,7 @@ var (
 	styleGo = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
 	styleC  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
 	// Rust: ordinary strings may span lines too
-	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, spanLines: true, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
+	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])[bc]?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	styleLua  = commentStyle{start: "--", quotes: `'"`, blockOpen: []string{"[[", "[="}}
@@ -168,16 +167,12 @@ func unsafeLine(st commentStyle, lines [][]byte, i int) string {
 	case st.yaml:
 		return yamlUnsafe(lines, i)
 	}
-	// Where strings may span lines, every line from the top must close its
-	// own quotes, whether a backslash escapes ($'...' in bash and zsh, shell
-	// double quotes) or not: a string left open anywhere above, or a line
-	// that reads two ways, and the marker is refused. Elsewhere a string
-	// ends with its line, and only the line itself counts.
-	from := i
-	if st.spanLines {
-		from = 0
-	}
-	for k := from; k <= i; k++ {
+	// Every line from the top must close its own quotes, whether a
+	// backslash escapes ($'...' in bash and zsh, Lua's \z, C's \ at the
+	// end) or not: a string left open anywhere above, or a line that reads
+	// two ways, and the marker is refused. Almost every language has some
+	// way for a string to run over lines, so this holds for all of them.
+	for k := 0; k <= i; k++ {
 		l := bytes.TrimRight(lines[k], "\r\n")
 		if scanQuotes(st, l, true) != 0 || scanQuotes(st, l, false) != 0 {
 			if k == i {
