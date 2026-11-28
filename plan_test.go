@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,21 +13,8 @@ const planSecret = "Zx81kq9PmW3vT7bRq2Lp"
 
 func TestCLIAllowCommands(t *testing.T) {
 	r := newRepo(t)
-	r.write("app.yaml", "db:\n  password: "+planSecret+"\n")
 	r.write("we*ird.txt", "token = "+planSecret+"x\n")
 	r.write("a b.txt", "token = "+planSecret+"y\n")
-
-	// -n writes nothing, before or after the operands.
-	r.must("segscan", "allow", "line", "-n", "app.yaml:2")
-	r.must("segscan", "allow", "line", "app.yaml:2", "-n")
-	if strings.Contains(r.read("app.yaml"), "segscan:allow") {
-		t.Fatal("-n wrote the file")
-	}
-	r.must("segscan", "allow", "line", "app.yaml:2")
-	r.must("segscan", "allow", "line", "app.yaml:2") // idempotent
-	if got := r.read("app.yaml"); got != "db:\n  password: "+planSecret+" # segscan:allow\n" {
-		t.Errorf("marker: %q", got)
-	}
 
 	r.must("segscan", "allow", "path", "we*ird.txt")
 	if _, errs, code := r.run("segscan", "allow", "path", "a b.txt"); code != 1 || !strings.Contains(errs, "white space") {
@@ -49,8 +38,94 @@ func TestCLIAllowCommands(t *testing.T) {
 		t.Errorf("a bad fingerprint should be refused")
 	}
 	out, _, _ := r.run("segscan", "scan", "-no-header")
-	if strings.Contains(out, "app.yaml") || strings.Contains(out, "we*ird") || !strings.Contains(out, "a b.txt") {
+	if strings.Contains(out, "we*ird") || !strings.Contains(out, "a b.txt") {
 		t.Errorf("scan after the actions:\n%s", out)
+	}
+}
+
+// fpOf returns the fingerprint of the first finding in file.
+func fpOf(t *testing.T, r *repo, file string) string {
+	t.Helper()
+	out, _, _ := r.run("segscan", "scan", "-json", file)
+	var f struct{ FP string }
+	if err := json.Unmarshal([]byte(strings.SplitN(out, "\n", 2)[0]), &f); err != nil || f.FP == "" {
+		t.Fatalf("no finding in %s: %q %v", file, out, err)
+	}
+	return f.FP
+}
+
+// An fp allowed in some files only: the same value elsewhere is reported.
+func TestCLIAllowFPScoped(t *testing.T) {
+	r := newRepo(t)
+	line := "token = " + planSecret + "\n"
+	for _, f := range []string{"nodes/n1/nginx.conf", "nodes/n2/nginx.conf", "app/x.conf", "app/y.conf"} {
+		r.write(f, line)
+	}
+	fp := fpOf(t, r, "app/x.conf")
+
+	r.must("segscan", "allow", "fp", "-n", "-file", "app/x.conf", fp)
+	if _, err := os.Stat(filepath.Join(r.dir, ".segscan-allow")); err == nil {
+		t.Fatal("-n wrote")
+	}
+	r.must("segscan", "allow", "fp", "-file", "app/x.conf", fp)
+	r.must("segscan", "allow", "fp", fp, "-path", "/nodes/*/nginx.conf") // flags after the operands
+	r.must("segscan", "allow", "fp", "-file", "app/x.conf", fp)          // no duplicate
+	allow := r.read(".segscan-allow")
+	if strings.Count(allow, "path:/app/x.conf") != 1 || !strings.Contains(allow, fp+" path:/nodes/*/nginx.conf") {
+		t.Errorf(".segscan-allow:\n%s", allow)
+	}
+	out, _, _ := r.run("segscan", "scan", "-no-header")
+	if strings.Contains(out, "nodes/") || strings.Contains(out, "app/x.conf") || !strings.Contains(out, "app/y.conf") {
+		t.Errorf("scan:\n%s", out)
+	}
+	// From another directory, the path is still the repository path.
+	cmd := exec.Command(filepath.Join(r.bin, "segscan"), "scan", "-no-header", "-allow", "../.segscan-allow", "x.conf", "y.conf")
+	cmd.Dir, cmd.Env = filepath.Join(r.dir, "app"), r.env
+	if out, err := cmd.CombinedOutput(); strings.Contains(string(out), "x.conf") || !strings.Contains(string(out), "y.conf") {
+		t.Errorf("scan from app/: %v\n%s", err, out)
+	}
+
+	// A bare fp line covers the scoped ones.
+	r.must("segscan", "allow", "fp", fp)
+	r.must("segscan", "allow", "fp", "-file", "app/y.conf", fp)
+	if strings.Contains(r.read(".segscan-allow"), "path:/app/y.conf") {
+		t.Errorf("a scoped line after a bare one:\n%s", r.read(".segscan-allow"))
+	}
+	if out, _, _ := r.run("segscan", "scan", "-no-header"); out != "" {
+		t.Errorf("scan after the bare fp: %s", out)
+	}
+
+	if _, errs, code := r.run("segscan", "allow", "fp", "-path", "/a b", fp); code != 1 || !strings.Contains(errs, "white space") {
+		t.Errorf("a glob with a space: exit %d %s", code, errs)
+	}
+	if _, _, code := r.run("segscan", "allow", "fp", "-path", "/x", "-file", "app/y.conf", fp); code == 0 {
+		t.Errorf("-path and -file together should be refused")
+	}
+}
+
+func TestAllowListScoped(t *testing.T) {
+	a := &allowList{fp: map[string]bool{}}
+	a.add([]byte("aaaaaaaaaaaa path:/nodes/*/nginx.conf path:secrets/  # two globs\n" +
+		"bbbbbbbbbbbb pth:/x\n" + // a typo: the line counts for nothing
+		"cccccccccccc path:\n" +
+		"DDDDDDDDDDDD path:*.yaml\n"))
+	for _, c := range []struct {
+		fp, file string
+		want     bool
+	}{
+		{"aaaaaaaaaaaa", "nodes/n1/nginx.conf", true},
+		{"aaaaaaaaaaaa", "nodes/n1/sub/nginx.conf", false},
+		{"aaaaaaaaaaaa", "secrets/a/b.txt", true},
+		{"aaaaaaaaaaaa", "other.txt", false},
+		{"aaaaaaaaaaaa", "", false},
+		{"bbbbbbbbbbbb", "x", false},
+		{"bbbbbbbbbbbb", "other", false},
+		{"cccccccccccc", "x", false},
+		{"dddddddddddd", "deep/a.yaml", true},
+	} {
+		if got := a.allowFP(c.fp, c.file); got != c.want {
+			t.Errorf("allowFP(%s, %q) = %v", c.fp, c.file, got)
+		}
 	}
 }
 
@@ -140,21 +215,17 @@ func TestPlanHashCheck(t *testing.T) {
 	f := filepath.Join(dir, "a.yaml")
 	os.WriteFile(f, []byte("k: v\n"), 0o644)
 	p := &plan{top: dir, allowPath: filepath.Join(dir, ".segscan-allow"), actions: []action{
-		{Kind: actMarker, File: "a.yaml", Line: 1, Hash: fileHash([]byte("k: old\n"))},
 		{Kind: actAllowFP, FP: "abcdef012345", File: "a.yaml", Line: 1, Hash: fileHash([]byte("k: old\n"))},
+		{Kind: actAllowFP, FP: "abcdef012346", File: "a.yaml", Line: 1, Glob: "/a.yaml", Hash: fileHash([]byte("k: old\n"))},
 	}}
 	r, err := p.apply(false)
 	if err != nil || len(r.Done) != 0 || len(r.Skipped) != 1 || !strings.Contains(r.Skipped[0], "changed since the scan") {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if data, _ := os.ReadFile(f); string(data) != "k: v\n" {
-		t.Errorf("changed file was written: %q", data)
-	}
 	if _, err := os.Stat(p.allowPath); err == nil {
 		t.Errorf("the allowlist was written for a changed file")
 	}
-	// With the right hash both apply, and the file keeps its mode.
-	os.Chmod(f, 0o600)
+	// With the right hash both apply.
 	data, _ := os.ReadFile(f)
 	for i := range p.actions {
 		p.actions[i].Hash = fileHash(data)
@@ -162,8 +233,11 @@ func TestPlanHashCheck(t *testing.T) {
 	if r, err := p.apply(false); err != nil || len(r.Done) != 2 {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if st, _ := os.Stat(f); st.Mode().Perm() != 0o600 {
-		t.Errorf("mode %v", st.Mode().Perm())
+	if allow, _ := os.ReadFile(p.allowPath); !strings.Contains(string(allow), "abcdef012346 path:/a.yaml  # a.yaml:1") {
+		t.Errorf("allowlist: %s", allow)
+	}
+	if data, _ := os.ReadFile(f); string(data) != "k: v\n" {
+		t.Errorf("the file itself was written: %q", data)
 	}
 }
 

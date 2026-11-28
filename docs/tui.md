@@ -70,7 +70,7 @@ are new or whose line changed.
 - **Grouping:** a file's findings can be folded into one row, so a series
   (`nvme0n1p3`, `nvme2n1p2`, ...) takes one decision.
 - **Allowed findings:** in "show allowed" mode they are shown dimmed, with
-  the marker `a`.
+  the marker `=`.
 - **Status line:** the planned action of the current row (6).
 
 ## 4. Preview
@@ -97,11 +97,11 @@ the launch screen.
 |---|---|---|---|
 | `I` | file → `.gitignore` | `I`, colour 1 | the root `.gitignore`, anchored (`/path/file`), glob characters escaped. An ignore rule does not stop git from tracking a file it already tracks, so a tracked file is also removed from the index (`git rm --cached`; the file stays on disk). A file in the index but not in `HEAD`: nothing reaches the history. A file in `HEAD`: a separate confirmation, with the warning that the value is in the history. A file with a `.sec/manifest` entry: warning, `check` will miss the file in a clean clone |
 | `F` | file → allowlist (`path:/file`) | `F`, colour 2 | not for `private_key` rows: `check` does not honour `path:` lines for private keys |
-| `A` | fingerprint → allowlist | `A`, colour 3 | applies to every finding with that fp in the tree; all of them are coloured, and the status line says how many there are and in how many files. Not for `private_key` rows: their fp is computed from the `BEGIN ... PRIVATE KEY` line, the same for every key with that marker, so one allow would hide them all |
-| `M` | `segscan:allow` in a comment on the line | `M`, colour 3 | the comment syntax comes from the file type (`#`, `//`, `--`, `;`, `<!-- -->`). Offered only where the end of the line is certainly outside a string: not in JSON, not inside quoted strings, YAML block scalars, heredocs and the like, not for an unknown type. In doubt, not offered |
+| `a` | fingerprint → allowlist, in this file only (`fp path:/file`) | `a`, colour 3 | the default. The same value in other files stays reported there. Also for `private_key` rows: the line allows the key in its own file only |
+| `A` (shift) | fingerprint → allowlist, everywhere | `A`, colour 3 | applies to every finding with that fp in the tree; all of them are coloured, and the status line says how many there are and in how many files. Not for `private_key` rows: their fp is computed from the `BEGIN ... PRIVATE KEY` line, the same for every key with that marker, so one allow would hide them all |
 | `K` | value → keystore, placeholder in the file | `K`, colour 4 | only with a keystore on this machine; see 5.1 |
 | `U` | unmark | | |
-| `E` | open in `$EDITOR` at the line | | the file is rescanned on return |
+| `E` | open in `$EDITOR` at the line | | the file is rescanned on return. The status line reminds that `segscan:allow` anywhere on a line skips it: the user writes it, in a comment of the file's language. segscan never writes it itself (see Decided 8) |
 
 - **Overlaps.** An action on a whole file (`I`, `F`) overrides the row
   actions in that file. Those rows are shown as overridden, and they come
@@ -112,7 +112,7 @@ the launch screen.
 ### 5.1 Action K
 
 K is offered only when the keystore of `.sec/config` exists on this machine
-(it may be empty). Without a keystore only `I`, `F`, `A` and `M` are left:
+(it may be empty). Without a keystore only `I`, `F`, `a` and `A` are left:
 no names, no placeholders, no transforms.
 
 - **Name.** The user types it, in the format of `.sec/names` (letters,
@@ -178,16 +178,16 @@ accepted.
   journal and lock), writing through a temporary file and a rename, and,
   in `segscan import`, finding the values of keys in a text under every
   transform and replacing them by placeholders.
-- **New:** adding to the allowlist and `.gitignore`, the `segscan:allow`
-  marker, replacing one stretch of a file by a placeholder.
+- **New:** adding to the allowlist and `.gitignore`, replacing one
+  stretch of a file by a placeholder.
 
 Every action gets a non-interactive command as well, so it can be tested
 without a terminal and used from scripts. The plan of a session exists
 only in memory and never holds values.
 
-Implemented (`plan.go`, `marker.go`): `segscan allow fp FP...`,
-`allow path FILE...`, `allow line FILE:LINE...` and `segscan ignore
-[-history] FILE...`, all with `-n`. Still to come: `segscan key move
+Implemented (`plan.go`): `segscan allow fp [-file FILE | -path GLOB]
+FP...`, `allow path FILE...` and `segscan ignore [-history] FILE...`, all
+with `-n`. Still to come: `segscan key move
 FILE:LINE:COL+LEN -name ...` (stage 2).
 
 ## Not in scope
@@ -208,7 +208,7 @@ FILE:LINE:COL+LEN -name ...` (stage 2).
 ## Stages
 
 1. The file set of `scan` (1); the TUI with list, preview, actions `I`,
-   `F`, `A`, `M`, `U`, `E`, saving and the exit dialog; LLM in the
+   `F`, `a`, `A`, `U`, `E`, saving and the exit dialog; LLM in the
    background.
 2. Testing `key add` / `key set` / `import` / `expand` / `check` by hand
    on a test repository; then action `K` with the keystore backup.
@@ -228,6 +228,13 @@ FILE:LINE:COL+LEN -name ...` (stage 2).
    uses its code directly (no running segscan as a command). Every action
    still gets a non-interactive command, for tests and scripts.
 7. Keystore backups lie next to the keystore and are removed by hand.
+8. segscan never writes `segscan:allow` into a file. Whether text added at
+   the end of a line is a comment cannot be decided for every language
+   and config format (strings over lines, heredocs, `${...}`, `\u`
+   escapes, trigraphs...), and a wrong guess changes the file or a
+   value. Instead: `a`, the fingerprint in this file only, which also
+   reappears when the value changes; and `E`, where the user writes the
+   marker by hand.
 
 ## Open questions
 

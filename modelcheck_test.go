@@ -82,6 +82,17 @@ func TestCLITrainGuardAndModelCheck(t *testing.T) {
 	if out, _, _ := r.run("segscan", "model", "check"); modelWords(t, out)[spoilKey] != "random" {
 		t.Errorf("an allowed finding should be learnt:\n%s", out)
 	}
+	// An fp in some files only: learnt from those files, not others.
+	r.write(".segscan-allow", f.FP+" path:/other/\n")
+	r.must("segscan", "train", "-guard")
+	if out, _, code := r.run("segscan", "model", "check"); code != 0 {
+		t.Errorf("an fp scoped to other files was learnt:\n%s", out)
+	}
+	r.write(".segscan-allow", f.FP+" path:/conf/*.conf\n")
+	r.must("segscan", "train", "-guard")
+	if out, _, _ := r.run("segscan", "model", "check"); modelWords(t, out)[spoilKey] != "random" {
+		t.Errorf("an fp scoped to its files should be learnt:\n%s", out)
+	}
 }
 
 func TestCLIModelCheckSince(t *testing.T) {

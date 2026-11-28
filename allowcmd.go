@@ -6,30 +6,46 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
 // The non-interactive forms of the TUI's actions (docs/tui.md 7):
 //
-//	segscan allow fp FP...          fingerprints -> allowlist
-//	segscan allow path FILE...      path:/FILE -> allowlist
-//	segscan allow line FILE:LINE... segscan:allow in a comment on the line
+//	segscan allow fp FP...             fingerprints -> allowlist
+//	segscan allow fp -file FILE FP...  the same, in that file only
+//	segscan allow fp -path GLOB FP...  the same, in the files GLOB covers
+//	segscan allow path FILE...         path:/FILE -> allowlist
 //	segscan ignore FILE...          -> .gitignore, and out of the index
 
 var fpRE = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
 func cmdAllow(args []string) {
-	if len(args) == 0 || (args[0] != "fp" && args[0] != "path" && args[0] != "line") {
-		fmt.Fprintln(os.Stderr, "usage: segscan allow fp FP... | allow path FILE... | allow line FILE:LINE... [-n] [-allow file]")
+	if len(args) == 0 || (args[0] != "fp" && args[0] != "path") {
+		fmt.Fprintln(os.Stderr, "usage: segscan allow fp [-file FILE | -path GLOB] FP... | allow path FILE... [-n] [-allow file]")
 		os.Exit(2)
 	}
 	what := args[0]
 	fs, c := flags("allow " + what)
 	dry := fs.Bool("n", false, "only print what would be done")
+	var inFile, inGlob *string
+	if what == "fp" {
+		inFile = fs.String("file", "", "only in this file")
+		inGlob = fs.String("path", "", "only in the files this path: glob covers (/nodes/*/nginx.conf)")
+	}
 	operands := parseInterspersed(fs, args[1:])
 	c.finish(fs)
 	p := newPlan(c)
+	glob := ""
+	if what == "fp" {
+		switch {
+		case *inFile != "" && *inGlob != "":
+			die(fmt.Errorf("allow fp: -file or -path, not both"))
+		case *inFile != "":
+			glob = "/" + globEscape(mustRepoFile(*inFile))
+		case *inGlob != "":
+			glob = *inGlob
+		}
+	}
 	for _, a := range operands {
 		switch what {
 		case "fp":
@@ -37,16 +53,9 @@ func cmdAllow(args []string) {
 			if !fpRE.MatchString(fp) {
 				die(fmt.Errorf("%q is not a fingerprint (12 hex digits, the fp column)", a))
 			}
-			p.actions = append(p.actions, action{Kind: actAllowFP, FP: fp})
+			p.actions = append(p.actions, action{Kind: actAllowFP, FP: fp, Glob: glob})
 		case "path":
 			p.actions = append(p.actions, action{Kind: actAllowFile, File: mustRepoFile(a)})
-		case "line":
-			i := strings.LastIndexByte(a, ':')
-			no, err := strconv.Atoi(a[i+1:])
-			if i < 0 || err != nil || no < 1 {
-				die(fmt.Errorf("%q: want FILE:LINE", a))
-			}
-			p.actions = append(p.actions, action{Kind: actMarker, File: mustRepoFile(a[:i]), Line: no})
 		}
 	}
 	runPlan(p, *dry)

@@ -24,8 +24,8 @@ const usage = `segscan - statistical secret scanner
                                         train a model (no paths: git ls-files)
   segscan model check [-m model] [-since REV]
                                         dictionary words of the model that look like keys
-  segscan allow fp FP... | allow path FILE... | allow line FILE:LINE... [-n]
-                                        fingerprints, files or one line -> allowlist / marker
+  segscan allow fp [-file FILE | -path GLOB] FP... | allow path FILE... [-n]
+                                        fingerprints (everywhere or in some files), files -> allowlist
   segscan ignore [-n] [-history] FILE...
                                         files -> .gitignore, and out of the index
   segscan scan  [flags] [-scanall] [path...|-]
@@ -462,10 +462,14 @@ func train(files []string, allow *allowList, top, skip int, guard *trainGuardSca
 		t.addWords(data)
 	}
 	for _, f := range files {
-		if allow.skipPath(repoPath(f)) {
+		rel := repoPath(f)
+		if allow.skipPath(rel) {
 			continue
 		}
 		if data, ok := readText(f); ok {
+			if guard != nil {
+				guard.file = rel
+			}
 			t.addFile(data)
 		}
 	}
@@ -702,10 +706,12 @@ func cmdScan(args []string) {
 		s.data("<stdin>", data)
 	} else {
 		for _, f := range scanFiles(fs.Args(), *scanall) {
-			if allow.skipPath(repoPath(f)) {
+			rel := repoPath(f)
+			if allow.skipPath(rel) {
 				continue
 			}
 			if data, ok := readText(f); ok {
+				s.rel = rel
 				s.data(f, data)
 			}
 		}

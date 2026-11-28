@@ -368,6 +368,7 @@ func (t *trainer) addWords(data []byte) {
 type trainGuardScan struct {
 	sc    *Scanner
 	allow *allowList
+	file  string   // repository path of the file being read, "" for a word list
 	spans [][2]int // the findings on the current line
 
 	findings, allowed, dropped int
@@ -381,7 +382,7 @@ func (g *trainGuardScan) line(s []byte) {
 	}
 	g.sc.Line(s, func(col int, text []byte, _, _ float64) {
 		g.findings++
-		if g.allow != nil && g.allow.fp[(&Finding{Text: string(text)}).FP()] {
+		if g.allow != nil && g.allow.allowFP((&Finding{Text: string(text)}).FP(), g.file) {
 			g.allowed++
 			return
 		}

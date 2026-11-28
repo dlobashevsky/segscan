@@ -251,6 +251,15 @@ func TestCLIConfigRepository(t *testing.T) {
 	if out, _, _ := r.run("segscan", "check"); strings.Contains(out, ".sec/leak.pem") {
 		t.Errorf("the working tree allowlists the key, but it was reported:\n%s", out)
 	}
+	// An fp in some files only: the key elsewhere is still reported.
+	r.write(".sec/allow", allowBefore+fp+" path:/.sec/other.pem\n")
+	if out, _, _ := r.run("segscan", "check"); !strings.Contains(out, ".sec/leak.pem") {
+		t.Errorf("an fp scoped to another file hid the key:\n%s", out)
+	}
+	r.write(".sec/allow", allowBefore+fp+" path:/.sec/leak.pem\n")
+	if out, _, _ := r.run("segscan", "check"); strings.Contains(out, ".sec/leak.pem") {
+		t.Errorf("an fp scoped to the file, but the key was reported:\n%s", out)
+	}
 	r.write(".sec/allow", allowBefore)
 	r.must("git", "rm", "-q", "--cached", ".sec/leak.pem")
 	r.must("rm", ".sec/leak.pem")

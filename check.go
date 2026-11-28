@@ -582,7 +582,7 @@ func (ck *checker) run(s *snapshot) []checkFinding {
 		}
 		fi := ck.info(s, f)
 		for _, x := range fi.finds {
-			if x.Check == ckPrivate && allow.fp[x.fp] {
+			if x.Check == ckPrivate && allow.allowFP(x.fp, f.Path) {
 				continue
 			}
 			if inSec && x.Check != ckPrivate {

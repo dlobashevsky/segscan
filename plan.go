@@ -20,15 +20,17 @@ type actKind byte
 const (
 	actIgnore    actKind = 'I' // file -> .gitignore (and out of the index)
 	actAllowFile actKind = 'F' // file -> path: line of the allowlist
-	actAllowFP   actKind = 'A' // fingerprint -> allowlist
-	actMarker    actKind = 'M' // segscan:allow in a comment on the line
+	actAllowFP   actKind = 'A' // fingerprint -> allowlist, in Glob's files or everywhere
 )
 
 type action struct {
 	Kind actKind
 	File string // repository path, from the top
-	Line int    // actMarker; for actAllowFP the line shown in the comment
+	Line int    // actAllowFP: the line shown in the comment
 	FP   string // actAllowFP
+	// Glob: actAllowFP only in the files this path: glob covers ("": in
+	// every file). The TUI sets the finding's own file, escaped.
+	Glob string
 	// Hash of the file when it was scanned (hex sha256); "" skips the
 	// check. A file that changed since keeps its actions unapplied.
 	Hash string
@@ -57,9 +59,11 @@ type applyResult struct {
 }
 
 // apply carries the plan out, or only reports it when dry. Writes go
-// through a temporary file and a rename. Order: the files themselves,
-// then git rm --cached, then the allowlist and .gitignore. On
-// an error it stops; every action is idempotent, so applying again is safe.
+// through a temporary file and a rename. The files themselves are never
+// changed: a segscan:allow comment is the user's to write. Order: the
+// allowlist, .gitignore for untracked files, then each tracked file out of
+// the index with its rule. On an error it stops; every action is
+// idempotent, so applying again is safe.
 func (p *plan) apply(dry bool) (applyResult, error) {
 	var r applyResult
 	verb := func(done, would string) string {
@@ -91,67 +95,18 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 		}
 	}
 
-	// 1. Markers in the files themselves.
-	byFile := map[string][]int{}
-	for _, a := range acts {
-		if a.Kind == actMarker {
-			byFile[a.File] = append(byFile[a.File], a.Line)
-		}
-	}
-	for _, f := range sortedKeys(byFile) {
-		full := filepath.Join(p.top, f)
-		if err := repoDir(p.top, filepath.Dir(full)); err != nil {
-			r.Skipped = append(r.Skipped, f+": "+err.Error())
-			continue
-		}
-		st, err := os.Lstat(full)
-		if err != nil {
-			return r, err
-		}
-		if !st.Mode().IsRegular() {
-			r.Skipped = append(r.Skipped, f+": not a regular file; no marker")
-			continue
-		}
-		data := current[f]
-		if data == nil {
-			if data, err = os.ReadFile(full); err != nil {
-				return r, err
-			}
-		}
-		lines := byFile[f]
-		sort.Sort(sort.Reverse(sort.IntSlice(lines))) // bottom-up
-		out, bad := data, false
-		for _, no := range lines {
-			next, err := markLine(f, out, no)
-			if err != nil {
-				r.Skipped = append(r.Skipped, err.Error())
-				bad = true
-				break
-			}
-			out = next
-		}
-		if bad || bytes.Equal(out, data) {
-			if !bad {
-				r.Done = append(r.Done, f+": already marked")
-			}
-			continue
-		}
-		if !dry {
-			if err := atomicWrite(full, out, st.Mode().Perm()); err != nil {
-				return r, err
-			}
-		}
-		r.Done = append(r.Done, fmt.Sprintf("%s: %s segscan:allow on line(s) %s", f, verb("put", "would put"), joinInts(lines)))
-	}
-
-	// 2. The allowlist and .gitignore.
+	// The allowlist and .gitignore.
 	var allowLines, ignoreLines []string
 	var untrack []action
 	untracked := map[string]bool{}
 	for _, a := range acts {
 		switch a.Kind {
 		case actAllowFP:
-			line := strings.ToLower(a.FP)
+			line, err := allowFPLine(a.FP, a.Glob)
+			if err != nil {
+				r.Skipped = append(r.Skipped, err.Error())
+				continue
+			}
 			if a.File != "" {
 				line += fmt.Sprintf("  # %s:%d", a.File, a.Line) // where it was seen, never the text
 			}
@@ -394,26 +349,48 @@ func lineHas(data []byte, line string) bool {
 // allowlist reads them, in lower case; path: globs as written, since paths
 // are matched with their case.
 func allowHas(data []byte, line string) bool {
-	entry := func(l string) string {
+	// entry: the line's meaning: path:glob, or fp with its sorted globs.
+	entry := func(l string) (fp string, globs string) {
 		if i := strings.IndexByte(l, '#'); i >= 0 {
 			l = l[:i]
 		}
 		f := strings.Fields(l)
 		if len(f) == 0 {
-			return ""
+			return "", ""
 		}
 		if strings.HasPrefix(f[0], "path:") {
-			return f[0]
+			return f[0], ""
 		}
-		return strings.ToLower(f[0])
+		rest := append([]string{}, f[1:]...)
+		sort.Strings(rest)
+		return strings.ToLower(f[0]), strings.Join(rest, " ")
 	}
-	want := entry(line)
+	wantFP, wantGlobs := entry(line)
 	for _, l := range strings.Split(string(data), "\n") {
-		if entry(l) == want {
+		fp, globs := entry(l)
+		// A bare fp line covers every file: a scoped line adds nothing.
+		if fp == wantFP && (globs == wantGlobs || (globs == "" && !strings.HasPrefix(fp, "path:"))) {
 			return true
 		}
 	}
 	return false
+}
+
+// allowFPLine makes the line for a fingerprint, in glob's files only
+// unless glob is "", and checks it with the allowlist's own parser: a glob
+// it cannot hold (white space, '#') is refused rather than written wrong.
+func allowFPLine(fp, glob string) (string, error) {
+	fp = strings.ToLower(fp)
+	if glob == "" {
+		return fp, nil
+	}
+	line := fp + " path:" + glob
+	a := &allowList{fp: map[string]bool{}}
+	a.add([]byte(line))
+	if len(a.fp) != 0 || len(a.fpIn[fp]) != 1 || a.fpIn[fp][0] != glob {
+		return "", fmt.Errorf("%q: an allowlist line cannot hold this glob (white space or #)", glob)
+	}
+	return line, nil
 }
 
 // allowPathLine makes the path: line that skips exactly this file, and

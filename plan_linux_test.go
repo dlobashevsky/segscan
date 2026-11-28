@@ -22,8 +22,7 @@ func TestCLIAllowSecRepo(t *testing.T) {
 	}
 }
 
-// A symlinked .sec/ is never written through, nor a symlinked directory
-// holding a file to mark.
+// A symlinked .sec/ is never written through.
 func TestCLIAllowSymlinkedDirs(t *testing.T) {
 	r := newRepo(t)
 	outside := t.TempDir()
@@ -37,14 +36,6 @@ func TestCLIAllowSymlinkedDirs(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "allow")); err == nil {
 		t.Errorf("wrote outside the repository")
-	}
-	os.WriteFile(filepath.Join(outside, "a.yaml"), []byte("k: v\n"), 0o644)
-	os.Symlink(outside, filepath.Join(r.dir, "conf"))
-	if _, errs, code := r.run("segscan", "allow", "line", "conf/a.yaml:1"); code == 0 || !strings.Contains(errs, "symlink") {
-		t.Errorf("marker through a symlinked directory: exit %d %s", code, errs)
-	}
-	if data, _ := os.ReadFile(filepath.Join(outside, "a.yaml")); string(data) != "k: v\n" {
-		t.Errorf("marked a file outside the repository: %q", data)
 	}
 }
 
