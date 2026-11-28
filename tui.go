@@ -47,6 +47,7 @@ type tuiState struct {
 	rows     []*tuiRow
 	hashes   map[string]string               // repository path -> hash at the scan
 	pemFiles map[string]bool                 // files with a private key, shown or allowed
+	fpFiles  map[string]map[string]bool      // fingerprint -> files, shown or allowed
 	source   func(file string) []string      // lines of a file for the preview
 	ignore   func(file string) (inHead bool) // git state for action I
 
@@ -288,9 +289,9 @@ func (s *tuiState) carryMarks(old *tuiState) int {
 	}
 	for fp := range old.fpMark {
 		ok := true
-		for _, rs := range [][]*tuiRow{old.rows, s.rows} {
-			for _, r := range rs {
-				if r.fp == fp && !same(r.file) {
+		for _, st := range []*tuiState{old, s} {
+			for _, f := range st.filesWithFP(fp) {
+				if !same(f) {
 					ok = false
 				}
 			}
@@ -303,6 +304,21 @@ func (s *tuiState) carryMarks(old *tuiState) int {
 	}
 	s.rebuild()
 	return dropped
+}
+
+// filesWithFP lists the files holding a fingerprint: those of its rows
+// and those where the allowlist hides it.
+func (s *tuiState) filesWithFP(fp string) []string {
+	seen := map[string]bool{}
+	for f := range s.fpFiles[fp] {
+		seen[f] = true
+	}
+	for _, r := range s.rows {
+		if r.fp == fp {
+			seen[r.file] = true
+		}
+	}
+	return sortedKeys(seen)
 }
 
 // fpSpread counts the findings and files that share a fingerprint.
@@ -536,9 +552,9 @@ func (s *tuiState) planActions() []action {
 			// Everywhere: every file with the fingerprint must still be
 			// as it was scanned.
 			all := map[string]string{}
-			for _, o := range s.rows {
-				if o.fp == r.fp && o.file != r.file {
-					all[o.file] = s.hashes[o.file]
+			for _, f := range s.filesWithFP(r.fp) {
+				if f != r.file {
+					all[f] = s.hashes[f]
 				}
 			}
 			out = append(out, action{Kind: actAllowFP, FP: r.fp, File: r.file, Line: r.f.Line, Hash: s.hashes[r.file], Hashes: all})

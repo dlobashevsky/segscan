@@ -726,6 +726,71 @@ func checkKeystore(top string) (*keystore, string) {
 	return ks, ""
 }
 
+// loadHeadChains reads the files of HEAD, so that the transform chains its
+// placeholders use are patterns of check 6 too, even where the working
+// tree no longer has them.
+func (ck *checker) loadHeadChains(cf *catFile) {
+	head, err := gitOut("-C", ck.top, "rev-parse", "-q", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return
+	}
+	if s, err := commitSnapshot(ck.top, cf, strings.TrimSpace(head)); err == nil {
+		for _, f := range s.Files {
+			if !f.Link && !f.Gitlink {
+				ck.info(s, f)
+			}
+		}
+	}
+}
+
+func sortCheckFindings(finds []checkFinding) {
+	sort.SliceStable(finds, func(i, j int) bool {
+		if finds[i].File != finds[j].File {
+			return finds[i].File < finds[j].File
+		}
+		return finds[i].Line < finds[j].Line
+	})
+}
+
+// checkWorktree is segscan check of the working tree, as cmdCheck does it
+// without -staged, -range or -all: what the TUI shows after a save. why
+// says why known values were not checked, if they were not.
+func checkWorktree(top string) (finds []checkFinding, why string, err error) {
+	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
+	seen := map[string]bool{}
+	collect := func(fs []checkFinding) {
+		for _, f := range fs {
+			key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.Check, f.File, f.Line, f.Col, f.Msg)
+			if !seen[key] {
+				seen[key] = true
+				finds = append(finds, f)
+			}
+		}
+	}
+	s, err := worktreeSnapshot(top)
+	if err != nil {
+		return nil, "", err
+	}
+	collect(ck.run(s))
+	ks, why := checkKeystore(top)
+	if ks != nil {
+		defer ks.close()
+		cf, err := newCatFile(top)
+		if err != nil {
+			return nil, "", err
+		}
+		defer cf.close()
+		ck.loadHeadChains(cf)
+		ck.known = buildMatcher(ks, ck.chains)
+		if s, err = worktreeSnapshot(top); err != nil {
+			return nil, "", err
+		}
+		collect(ck.runKnown(s))
+	}
+	sortCheckFindings(finds)
+	return finds, why, nil
+}
+
 func cmdCheck(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	staged := fs.Bool("staged", false, "check the index (pre-commit)")
@@ -748,6 +813,15 @@ func cmdCheck(args []string) {
 	top := secRoot()
 	if top == "" {
 		die(fmt.Errorf("no %s/ in this repository: run segscan init", secDir))
+	}
+	if n == 0 {
+		// The working tree: the same code the TUI runs after a save.
+		finds, why, err := checkWorktree(top)
+		if err != nil {
+			die(err)
+		}
+		printCheck(finds, why, *asJSON, *noHeader)
+		return
 	}
 	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
 	var cf *catFile
@@ -811,39 +885,31 @@ func cmdCheck(args []string) {
 	ks, why := checkKeystore(top)
 	if ks != nil {
 		defer ks.close()
-		if head, err := gitOut("-C", top, "rev-parse", "-q", "--verify", "HEAD^{commit}"); err == nil {
-			if cf == nil {
-				if cf, err = newCatFile(top); err != nil {
-					die(err)
-				}
-				defer cf.close()
+		if cf == nil {
+			var err error
+			if cf, err = newCatFile(top); err != nil {
+				die(err)
 			}
-			if s, err := commitSnapshot(top, cf, strings.TrimSpace(head)); err == nil {
-				for _, f := range s.Files {
-					if !f.Link && !f.Gitlink {
-						ck.info(s, f)
-					}
-				}
-			}
+			defer cf.close()
 		}
+		ck.loadHeadChains(cf)
 		ck.known = buildMatcher(ks, ck.chains)
 		each(func(s *snapshot) { collect(ck.runKnown(s)) })
 	}
 	if *rng == "" && !*all {
-		sort.SliceStable(finds, func(i, j int) bool {
-			if finds[i].File != finds[j].File {
-				return finds[i].File < finds[j].File
-			}
-			return finds[i].Line < finds[j].Line
-		})
+		sortCheckFindings(finds)
 	}
+	printCheck(finds, why, *asJSON, *noHeader)
+}
+
+func printCheck(finds []checkFinding, why string, asJSON, noHeader bool) {
 	for i, f := range finds {
-		if *asJSON {
+		if asJSON {
 			out, _ := json.Marshal(f)
 			fmt.Println(string(out))
 			continue
 		}
-		if i == 0 && !*noHeader {
+		if i == 0 && !noHeader {
 			fmt.Println("commit\tfile\tline\tcol\tcheck\tmessage")
 		}
 		fmt.Printf("%s\t%s\t%d\t%d\t%s\t%s\n", f.Commit, escape(f.File), f.Line, f.Col, f.Check, escape(f.Msg))

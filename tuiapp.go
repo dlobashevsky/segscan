@@ -420,6 +420,9 @@ func (a *tuiApp) run() {
 				p := &plan{top: a.top, allowPath: a.allowPath, actions: acts}
 				r, err := p.apply(false)
 				printApply(r, err)
+				for _, l := range a.check() { // as after w
+					fmt.Println(show(l))
+				}
 			}
 			return
 		case a.s.saveNow:
@@ -448,17 +451,16 @@ func (a *tuiApp) scan() {
 		o.MinLen = v
 	}
 	allow := loadAllow(a.c.allow, !a.c.noDef)
-	scanAllow := allow
-	if a.p.showAllowed {
-		// fingerprints (bare and with path:) are shown, dimmed; path:
-		// lines still skip their files
-		scanAllow = &allowList{fp: map[string]bool{}, paths: allow.paths, words: allow.words}
-	}
 	var rows []*tuiRow
 	hashes := map[string]string{}
 	pem := map[string]bool{}
 	outside := 0
-	sc := &fileScan{sc: NewScanner(a.m, o), allow: scanAllow}
+	fpFiles := map[string]map[string]bool{}
+	// The scan sees every fingerprint (path: lines still skip files); the
+	// rows are the ones not allowed, or all in "show allowed" mode. A
+	// needs every file with the fingerprint, shown or not.
+	noFP := &allowList{fp: map[string]bool{}, paths: allow.paths, words: allow.words}
+	sc := &fileScan{sc: NewScanner(a.m, o), allow: noFP}
 	for _, f := range scanFiles(splitPaths(a.p.paths), false) {
 		rp := repoPath(f)
 		// The actions name repository paths: a file outside the checkout
@@ -481,7 +483,15 @@ func (a *tuiApp) scan() {
 		}
 		sc.out = func(x Finding) {
 			fp := x.FP()
-			rows = append(rows, &tuiRow{f: x, file: rp, fp: fp, allowed: allow.allowFP(fp, rp)})
+			if fpFiles[fp] == nil {
+				fpFiles[fp] = map[string]bool{}
+			}
+			fpFiles[fp][rp] = true
+			allowed := allow.allowFP(fp, rp)
+			if allowed && !a.p.showAllowed {
+				return
+			}
+			rows = append(rows, &tuiRow{f: x, file: rp, fp: fp, allowed: allowed})
 		}
 		sc.rel = rp
 		sc.data(f, data)
@@ -490,6 +500,7 @@ func (a *tuiApp) scan() {
 	a.s = newTUIState(rows)
 	a.s.hashes = hashes
 	a.s.pemFiles = pem
+	a.s.fpFiles = fpFiles
 	a.s.previewLines = a.p.previewLines
 	a.lines = map[string][]string{}
 	a.s.source = a.source
@@ -570,18 +581,12 @@ func (a *tuiApp) check() []string {
 	if top == "" {
 		return []string{"(no .sec/: segscan check not run)"}
 	}
-	ck := &checker{top: top, cache: map[string]*fileInfo{}, chains: map[string]bool{}}
-	s, err := worktreeSnapshot(top)
+	finds, why, err := checkWorktree(top) // what segscan check prints
 	if err != nil {
 		return []string{"segscan check: " + err.Error()}
 	}
-	finds := ck.run(s)
 	note := ""
-	if ks, why := checkKeystore(top); ks != nil {
-		defer ks.close()
-		ck.known = buildMatcher(ks, ck.chains)
-		finds = append(finds, ck.runKnown(s)...)
-	} else {
+	if why != "" {
 		note = " (known values not checked: " + why + ")"
 	}
 	if len(finds) == 0 {

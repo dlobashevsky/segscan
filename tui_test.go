@@ -410,3 +410,22 @@ func TestTUIAHashesAndFoldedEdit(t *testing.T) {
 		t.Errorf("E on a folded file: %q", s.editFile)
 	}
 }
+
+// A also checks the files where the allowlist hides the fingerprint.
+func TestTUIAHiddenOccurrences(t *testing.T) {
+	s := newTUIState(testRows())
+	fp := s.rows[1].fp // a.conf
+	s.hashes = map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc", "hidden.conf": "hh"}
+	s.fpFiles = map[string]map[string]bool{fp: {"a.conf": true, "hidden.conf": true}}
+	keys(s, "home", "A")
+	if acts := s.planActions(); len(acts) != 1 || acts[0].Hashes["hidden.conf"] != "hh" {
+		t.Errorf("A: %+v", acts)
+	}
+	// and a rescan where hidden.conf changed drops the mark
+	n := newTUIState(testRows())
+	n.hashes = map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc", "hidden.conf": "hh2"}
+	n.fpFiles = s.fpFiles
+	if d := n.carryMarks(s); d != 1 || len(n.fpMark) != 0 {
+		t.Errorf("hidden file changed: dropped %d, %v", d, n.fpMark)
+	}
+}
