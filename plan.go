@@ -237,30 +237,54 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 	// .gitignore must not have changed either: the other way round the
 	// rule is there without the untracking. One call for all the files
 	// would not do: git removes what it can before it reports the rest.
+	gitignore := filepath.Join(p.top, ".gitignore")
 	if len(untrack) > 0 {
 		if err := repoDir(p.top, p.top); err != nil {
 			return r, err
 		}
+		// What can be seen before: a .gitignore that is no regular file.
+		if st, err := os.Lstat(gitignore); err == nil && !st.Mode().IsRegular() {
+			return r, fmt.Errorf("%s: not a regular file; nothing removed from the index", gitignore)
+		}
 	}
-	gitignore := filepath.Join(p.top, ".gitignore")
 	for _, a := range untrack {
+		var entry []byte
 		if !dry {
+			// The index entry as it is, to put it back if the rule
+			// cannot be written.
+			entry, _ = exec.Command("git", "-C", p.top, "--literal-pathspecs", "ls-files", "-s", "-z", "--", a.File).Output()
 			cmd := exec.Command("git", "-C", p.top, "--literal-pathspecs", "rm", "--cached", "-q", "--", a.File)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return r, fmt.Errorf("git rm --cached %s: %v %s", a.File, err, bytes.TrimSpace(out))
 			}
 		}
-		r.Done = append(r.Done, fmt.Sprintf("%s: %s from the index (the file stays on disk)", a.File, verb("removed", "would be removed")))
 		added, err := appendLines(gitignore, []string{"/" + gitignoreEscape(a.File)}, lineHas, dry)
 		if err != nil {
-			return r, err
+			if rerr := p.restoreIndex(entry); rerr != nil {
+				return r, fmt.Errorf("%v; and %s could not be put back in the index: %v", err, a.File, rerr)
+			}
+			return r, fmt.Errorf("%v; %s is back in the index", err, a.File)
 		}
+		r.Done = append(r.Done, fmt.Sprintf("%s: %s from the index (the file stays on disk)", a.File, verb("removed", "would be removed")))
 		for _, l := range added {
 			r.Done = append(r.Done, fmt.Sprintf(".gitignore: %s %s", verb("added", "would add"), l))
 		}
 	}
 
 	return r, nil
+}
+
+// restoreIndex puts back index entries saved with ls-files -s -z.
+func (p *plan) restoreIndex(entries []byte) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	cmd := exec.Command("git", "-C", p.top, "update-index", "-z", "--index-info")
+	cmd.Stdin = bytes.NewReader(entries)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v %s", err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // gitState reports whether a repository path is in the index and in HEAD.

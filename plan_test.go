@@ -166,3 +166,33 @@ func TestPlanHashCheck(t *testing.T) {
 		t.Errorf("mode %v", st.Mode().Perm())
 	}
 }
+
+// .gitignore cannot take the rule: the file stays in the index.
+func TestCLIIgnoreGitignoreNotFile(t *testing.T) {
+	r := newRepo(t)
+	r.write("new.txt", "token = "+planSecret+"\n")
+	r.must("git", "add", "new.txt")
+	os.Mkdir(filepath.Join(r.dir, ".gitignore"), 0o755)
+	if _, errs, code := r.run("segscan", "ignore", "new.txt"); code == 0 || !strings.Contains(errs, "regular file") {
+		t.Errorf("exit %d %s", code, errs)
+	}
+	if out := r.must("git", "ls-files", "new.txt"); out != "new.txt\n" {
+		t.Errorf("new.txt left the index without a rule")
+	}
+}
+
+// The saved index entry comes back as it was, staged content included.
+func TestRestoreIndex(t *testing.T) {
+	r := newRepo(t)
+	r.write("a,b.txt", "v1\n")
+	r.must("git", "add", "a,b.txt")
+	r.write("a,b.txt", "v2\n")
+	before := r.must("git", "ls-files", "-s", "-z", "--", "a,b.txt")
+	r.must("git", "update-index", "--force-remove", "--", "a,b.txt")
+	if err := (&plan{top: r.dir}).restoreIndex([]byte(before)); err != nil {
+		t.Fatal(err)
+	}
+	if after := r.must("git", "ls-files", "-s", "-z", "--", "a,b.txt"); after != before {
+		t.Errorf("index %q, want %q", after, before)
+	}
+}
