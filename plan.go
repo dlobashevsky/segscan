@@ -167,6 +167,10 @@ func (p *plan) apply(dry bool) (applyResult, error) {
 				r.Skipped = append(r.Skipped, fmt.Sprintf("%q: a newline in the name; not ignored", a.File))
 				continue
 			}
+			if st, err := os.Lstat(filepath.Join(p.top, a.File)); err == nil && st.IsDir() {
+				r.Skipped = append(r.Skipped, a.File+": a directory; name its files, or add it to .gitignore by hand")
+				continue
+			}
 			tracked, inHead := p.gitState(a.File)
 			if tracked && p.stagedDiffers(a.File, inHead) {
 				// git rm --cached refuses it; say so before .gitignore

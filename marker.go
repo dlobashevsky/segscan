@@ -38,10 +38,11 @@ var (
 	// C-like languages, each with its multi-line strings: Go and JS raw
 	// and template strings, C++ R"(...)", Rust r#"..."#, the """ text
 	// blocks of Java, Kotlin, Scala, Swift and C# 11, C# @"...".
-	styleGo   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
-	styleJS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
-	styleC    = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
-	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])b?r#*"`)}}
+	styleGo = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
+	styleJS = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", "`"}}
+	styleC  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*"}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])(u8|[uUL])?R"`)}}
+	// Rust: ordinary strings may span lines too
+	styleRust = commentStyle{start: "//", quotes: "\"", blockOpen: []string{"/*"}, spanLines: true, rawOpen: []*regexp.Regexp{regexp.MustCompile(`(^|[^A-Za-z0-9_])b?r#*"`)}}
 	styleJVM  = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`, `#"`}}
 	styleCS   = commentStyle{start: "//", quotes: "\"'", blockOpen: []string{"/*", `"""`}, rawOpen: []*regexp.Regexp{regexp.MustCompile(`@\$*"|\$+@"`)}}
 	// PostgreSQL dollar quotes: $$...$$ and $tag$...$tag$

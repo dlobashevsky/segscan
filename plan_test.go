@@ -88,6 +88,15 @@ func TestCLIIgnore(t *testing.T) {
 		t.Errorf(".gitignore changed for a refused file")
 	}
 
+	// A directory: refused before .gitignore changes.
+	r.write("dir/x.txt", "x\n")
+	if _, errs, code := r.run("segscan", "ignore", "-history", "dir"); code != 1 || !strings.Contains(errs, "a directory") {
+		t.Errorf("directory: exit %d %s", code, errs)
+	}
+	if strings.Contains(r.read(".gitignore"), "dir") {
+		t.Errorf(".gitignore changed for a directory")
+	}
+
 	r.must("segscan", "ignore", "new.txt", "staged.txt")
 	if got := r.read(".gitignore"); got != "/new.txt\n/staged.txt\n" {
 		t.Errorf(".gitignore: %q", got)
