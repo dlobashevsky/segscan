@@ -33,6 +33,13 @@ type modelCheckOpts struct {
 
 const (
 	modelCheckMinLen = dictGuardLen
+	// Under the built-in model, uniform random lower-case strings cost
+	// (1st percentile / 5th / median, bits per letter): 6 letters
+	// 4.05 / 4.50 / 5.49, 10 letters 4.42 / 4.79 / 5.54, 20 letters
+	// 4.82 / 5.05 / 5.59. At 4.0 about 1% of random 6-letter words and
+	// fewer of the longer ones get through. Real names and glued words
+	// reach 4.9 (vikiaplus 4.82, kaufmann 4.64): word:<word> in the
+	// allowlist accepts them. A higher cutoff lets random keys through.
 	modelCheckMaxBpc = 4.0
 )
 
