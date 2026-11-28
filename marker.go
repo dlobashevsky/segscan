@@ -111,8 +111,11 @@ func markLine(repoPath string, data []byte, no int) ([]byte, error) {
 	// Never append to a comment already on the line: compilers, linters,
 	// editors and interpreters read many of them (//line, //go:, noqa,
 	// shellcheck, modelines...), and added text changes what they say.
-	if hasLineComment(st, body) {
-		return nil, fmt.Errorf("%s:%d: the line already has a comment; text added to it could change what it says (use the fingerprint)", repoPath, no)
+	// Where the comment character stands on the line does not matter: in
+	// "x=1# noqa" or ";// eslint" it starts a comment some tool reads, in a
+	// string it is harmless, and telling the two apart is what goes wrong.
+	if bytes.Contains(body, []byte(st.start)) {
+		return nil, fmt.Errorf("%s:%d: the line already holds %q (a comment?); text added could change what it says (use the fingerprint)", repoPath, no, st.start)
 	}
 	var add string
 	if st.end != "" {
@@ -220,27 +223,6 @@ func (st commentStyle) commentAt(body []byte, k int) bool {
 	return st.start != "#" || k == 0 || body[k-1] == ' ' || body[k-1] == '\t'
 }
 
-// hasLineComment reports whether the line already ends in a line comment.
-func hasLineComment(st commentStyle, body []byte) bool {
-	var q byte
-	for k := 0; k < len(body); k++ {
-		c := body[k]
-		switch {
-		case q != 0:
-			if c == '\\' && q != '\'' {
-				k++
-			} else if c == q {
-				q = 0
-			}
-		case strings.IndexByte(st.quotes, c) >= 0:
-			q = c
-		case st.commentAt(body, k):
-			return true
-		}
-	}
-	return false
-}
-
 func indentOf(l []byte) int { return len(l) - len(bytes.TrimLeft(l, " ")) }
 
 // yamlUnsafe: a marker after a YAML value is a comment only on a line of
@@ -309,6 +291,20 @@ func yamlOpensLine(l []byte) string {
 	}
 	if k := yamlKeyEnd(val); k >= 0 {
 		val = bytes.TrimSpace(val[k:])
+	}
+	// Node properties before the scalar: !tag, !!str, &anchor.
+	for len(val) > 0 && (val[0] == '!' || val[0] == '&') {
+		sp := bytes.IndexAny(val, " \t")
+		if sp < 0 {
+			val = nil
+			break
+		}
+		val = bytes.TrimSpace(val[sp:])
+	}
+	// An odd number of double quotes anywhere on the line: a string may
+	// run on, whatever the line looks like.
+	if bytes.Count(t, []byte(`"`))%2 != 0 {
+		return "an unbalanced double quote: a string may run over lines"
 	}
 	if len(val) > 0 && (val[0] == '"' || val[0] == '\'') && !yamlQuotedCloses(val) {
 		return "a quoted YAML scalar runs over lines"

@@ -12,7 +12,8 @@ func TestMarkLine(t *testing.T) {
 		want     string // "" = refused
 	}{
 		{"a.yaml", "db:\n  password: abc123\n", 2, "db:\n  password: abc123 # segscan:allow\n"},
-		{"a.yaml", "k: \"a#b\"\n", 1, "k: \"a#b\" # segscan:allow\n"},
+		{"a.yaml", "k: \"a#b\"\n", 1, ""}, // any # on the line refuses
+		{"a.yaml", "k: \"ab\"\n", 1, "k: \"ab\" # segscan:allow\n"},
 		{"a.yaml", "name: don't\n", 1, "name: don't # segscan:allow\n"},
 		{"a.yaml", "k: v # note\n", 1, ""},       // never into an existing comment
 		{"a.yaml", "k: \"abc\n  def\"\n", 1, ""}, // quoted scalar open at the end
@@ -65,6 +66,11 @@ func TestMarkLine(t *testing.T) {
 		{"a.yaml", "key: \"first\n  password: secret\n  last\"\n", 2, ""}, // inside a quoted scalar
 		{"a.yaml", "k: [a,\n  b: c]\n", 2, ""},                            // inside a flow sequence
 		{"a.yaml", "k: [a, b]\nx: y\n", 2, "k: [a, b]\nx: y # segscan:allow\n"},
+		{"a.yaml", "key: !!str \"first\n  password: secret\n  last\"\n", 2, ""}, // tag before the quote
+		{"a.yaml", "key: &a \"first\n  password: secret\n  last\"\n", 2, ""},    // anchor
+		{"a.py", "x=1# noqa: E501\n", 1, ""},                                    // # without a space
+		{"a.sh", "x=1;# shellcheck disable=SC2034\n", 1, ""},
+		{"a.sh", "echo a#b\n", 1, ""},                         // in doubt: any # on the line
 		{"a.js", "const a = <div>\nsecret\n</div>;\n", 2, ""}, // JS/TS: not offered (JSX)
 		{"a.sh", "echo 'it''s'\n", 1, "echo 'it''s' # segscan:allow\n"},
 		{"a.go", "u := \"server\"\n", 1, "u := \"server\" // segscan:allow\n"},
