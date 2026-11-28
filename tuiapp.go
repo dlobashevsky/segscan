@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -455,9 +456,17 @@ func (a *tuiApp) scan() {
 	}
 	var rows []*tuiRow
 	hashes := map[string]string{}
+	pem := map[string]bool{}
+	outside := 0
 	sc := &fileScan{sc: NewScanner(a.m, o), allow: scanAllow}
 	for _, f := range scanFiles(splitPaths(a.p.paths), false) {
 		rp := repoPath(f)
+		// The actions name repository paths: a file outside the checkout
+		// cannot take one.
+		if filepath.IsAbs(rp) || rp == ".." || strings.HasPrefix(rp, "../") {
+			outside++
+			continue
+		}
 		if allow.skipPath(rp) {
 			continue
 		}
@@ -466,6 +475,10 @@ func (a *tuiApp) scan() {
 			continue
 		}
 		hashes[rp] = fileHash(data)
+		// A private key, allowed or not: F (path:) would hide it.
+		if bytes.Contains(data, []byte("-----BEGIN ")) && bytes.Contains(data, []byte("PRIVATE KEY")) {
+			pem[rp] = true
+		}
 		sc.out = func(x Finding) {
 			fp := x.FP()
 			rows = append(rows, &tuiRow{f: x, file: rp, fp: fp, allowed: allow.allowFP(fp, rp)})
@@ -476,38 +489,21 @@ func (a *tuiApp) scan() {
 	old := a.s
 	a.s = newTUIState(rows)
 	a.s.hashes = hashes
+	a.s.pemFiles = pem
 	a.s.previewLines = a.p.previewLines
 	a.lines = map[string][]string{}
 	a.s.source = a.source
 	a.s.ignore = func(f string) bool { _, inHead, _ := (&plan{top: a.top}).gitState(f); return inHead }
+	var msgs []string
 	if old != nil {
-		a.s.sortMode, a.s.hideMarked, a.s.onlyFile, a.s.folded = old.sortMode, old.hideMarked, old.onlyFile, old.folded
-		dropped := 0
-		keep := func(f string) bool {
-			if old.hashes[f] == hashes[f] {
-				return true
-			}
-			dropped++
-			return false
-		}
-		for f, k := range old.fileMark {
-			if keep(f) {
-				a.s.fileMark[f], a.s.fileHist[f] = k, old.fileHist[f]
-			}
-		}
-		for k := range old.fpHere {
-			if keep(k[strings.IndexByte(k, 0)+1:]) {
-				a.s.fpHere[k] = true
-			}
-		}
-		for fp := range old.fpMark {
-			a.s.fpMark[fp] = true
-		}
-		a.s.rebuild()
-		if dropped > 0 {
-			a.s.msg = fmt.Sprintf("%d mark(s) dropped: their files changed", dropped)
+		if dropped := a.s.carryMarks(old); dropped > 0 {
+			msgs = append(msgs, fmt.Sprintf("%d mark(s) dropped: their files changed", dropped))
 		}
 	}
+	if outside > 0 {
+		msgs = append(msgs, fmt.Sprintf("%d file(s) outside the repository left out", outside))
+	}
+	a.s.msg = strings.Join(msgs, "; ")
 }
 
 func (a *tuiApp) source(f string) []string {

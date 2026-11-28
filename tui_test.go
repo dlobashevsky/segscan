@@ -347,3 +347,47 @@ func TestSplitPaths(t *testing.T) {
 		t.Errorf("typed: %q", got)
 	}
 }
+
+// A rescan keeps a mark only while the files it rests on are unchanged;
+// an A mark also needs the fingerprint to be in no new file.
+func TestTUICarryMarks(t *testing.T) {
+	hashes := map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc"}
+	mark := func() *tuiState {
+		s := newTUIState(testRows())
+		s.hashes = hashes
+		s.fpMark[s.rows[1].fp] = true                      // A: a.conf (both rows)
+		s.fpHere[fpHereKey(s.rows[0].fp, "b.yaml")] = true // a: b.yaml
+		s.fileMark["c.sh"] = actIgnore                     // I: c.sh
+		return s
+	}
+	rescan := func(h map[string]string, rows []*tuiRow) (*tuiState, int) {
+		s := newTUIState(rows)
+		s.hashes = h
+		return s, s.carryMarks(mark())
+	}
+	if s, n := rescan(hashes, testRows()); n != 0 || len(s.fpMark) != 1 || len(s.fpHere) != 1 || len(s.fileMark) != 1 {
+		t.Errorf("nothing changed: dropped %d, %v %v %v", n, s.fpMark, s.fpHere, s.fileMark)
+	}
+	changed := map[string]string{"a.conf": "ha2", "b.yaml": "hb2", "c.sh": "hc2"}
+	if s, n := rescan(changed, testRows()); n != 3 || s.nMarked() != 0 {
+		t.Errorf("all files changed: dropped %d, %d marked", n, s.nMarked())
+	}
+	// The A fingerprint shows up in a file it was not in when marked.
+	rows := testRows()
+	extra := *rows[1]
+	extra.file, extra.f.File = "d.conf", "d.conf"
+	h := map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc", "d.conf": "hd"}
+	if s, n := rescan(h, append(rows, &extra)); n != 1 || len(s.fpMark) != 0 {
+		t.Errorf("fp in a new file: dropped %d, %v", n, s.fpMark)
+	}
+}
+
+// F is refused for a file whose private key the allowlist hides.
+func TestTUIFileWithAllowedPrivateKey(t *testing.T) {
+	s := newTUIState(testRows())
+	s.pemFiles = map[string]bool{"b.yaml": true}
+	keys(s, "home", "down", "down", "F") // b.yaml
+	if s.fileMark["b.yaml"] != 0 || !strings.Contains(s.msg, "private key") {
+		t.Errorf("F with a hidden private key: %q", s.msg)
+	}
+}

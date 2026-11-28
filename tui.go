@@ -44,10 +44,11 @@ const (
 var sortNames = []string{"file,bpc,llm", "bpc,llm,file", "llm,bpc,file"}
 
 type tuiState struct {
-	rows   []*tuiRow
-	hashes map[string]string               // repository path -> hash at the scan
-	source func(file string) []string      // lines of a file for the preview
-	ignore func(file string) (inHead bool) // git state for action I
+	rows     []*tuiRow
+	hashes   map[string]string               // repository path -> hash at the scan
+	pemFiles map[string]bool                 // files with a private key, shown or allowed
+	source   func(file string) []string      // lines of a file for the preview
+	ignore   func(file string) (inHead bool) // git state for action I
 
 	view       []viewItem
 	cur, top   int
@@ -239,14 +240,59 @@ func (s *tuiState) current() (viewItem, *tuiRow) {
 	return it, s.rows[it.row]
 }
 
-// hasPEM reports a private key finding anywhere in the file.
+// hasPEM reports a private key anywhere in the file: a row, or one the
+// scan found but the allowlist hides.
 func (s *tuiState) hasPEM(file string) bool {
+	if s.pemFiles[file] {
+		return true
+	}
 	for _, r := range s.rows {
 		if r.file == file && r.f.Kind == kindPEM {
 			return true
 		}
 	}
 	return false
+}
+
+// carryMarks takes the marks of the session before a rescan, except those
+// that rest on a file changed since (or, for A, on a file that holds the
+// fingerprint only now): those files are to be looked at again. It
+// returns how many marks were dropped.
+func (s *tuiState) carryMarks(old *tuiState) int {
+	s.sortMode, s.hideMarked, s.onlyFile, s.folded = old.sortMode, old.hideMarked, old.onlyFile, old.folded
+	dropped := 0
+	same := func(f string) bool { return old.hashes[f] != "" && old.hashes[f] == s.hashes[f] }
+	for f, k := range old.fileMark {
+		if same(f) {
+			s.fileMark[f], s.fileHist[f] = k, old.fileHist[f]
+		} else {
+			dropped++
+		}
+	}
+	for k := range old.fpHere {
+		if same(k[strings.IndexByte(k, 0)+1:]) {
+			s.fpHere[k] = true
+		} else {
+			dropped++
+		}
+	}
+	for fp := range old.fpMark {
+		ok := true
+		for _, rs := range [][]*tuiRow{old.rows, s.rows} {
+			for _, r := range rs {
+				if r.fp == fp && !same(r.file) {
+					ok = false
+				}
+			}
+		}
+		if ok {
+			s.fpMark[fp] = true
+		} else {
+			dropped++
+		}
+	}
+	s.rebuild()
+	return dropped
 }
 
 // fpSpread counts the findings and files that share a fingerprint.
