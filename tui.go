@@ -47,7 +47,7 @@ type tuiState struct {
 	rows     []*tuiRow
 	hashes   map[string]string               // repository path -> hash at the scan
 	pemFiles map[string]bool                 // files with a private key, shown or allowed
-	fpFiles  map[string]map[string]bool      // fingerprint -> files, shown or allowed
+	fpFiles  map[string]map[string]int       // fingerprint -> file -> findings, shown or allowed
 	source   func(file string) []string      // lines of a file for the preview
 	ignore   func(file string) (inHead bool) // git state for action I
 
@@ -321,8 +321,15 @@ func (s *tuiState) filesWithFP(fp string) []string {
 	return sortedKeys(seen)
 }
 
-// fpSpread counts the findings and files that share a fingerprint.
+// fpSpread counts the findings and files that share a fingerprint, those
+// the allowlist hides included: A covers them all.
 func (s *tuiState) fpSpread(fp string) (n, files int) {
+	if m := s.fpFiles[fp]; len(m) > 0 {
+		for _, c := range m {
+			n += c
+		}
+		return n, len(m)
+	}
 	seen := map[string]bool{}
 	for _, r := range s.rows {
 		if r.fp == fp {
@@ -331,6 +338,23 @@ func (s *tuiState) fpSpread(fp string) (n, files int) {
 		}
 	}
 	return n, len(seen)
+}
+
+// spreadText is "N findings in M files", and how many of them are not
+// shown because the allowlist has them already.
+func (s *tuiState) spreadText(fp string) string {
+	n, files := s.fpSpread(fp)
+	shown := 0
+	for _, r := range s.rows {
+		if r.fp == fp {
+			shown++
+		}
+	}
+	t := fmt.Sprintf("%d findings in %d files", n, files)
+	if n > shown {
+		t += fmt.Sprintf(", %d of them allowed already", n-shown)
+	}
+	return t
 }
 
 // key handles one key. Keys are names: "up", "down", "pgup", "pgdn",
@@ -582,8 +606,7 @@ func (s *tuiState) summary() []string {
 				out = append(out, fmt.Sprintf("a  %s  -> allowlist, in %s only", a.FP, a.File))
 				continue
 			}
-			n, files := s.fpSpread(a.FP)
-			out = append(out, fmt.Sprintf("A  %s  -> allowlist (%d findings in %d files)", a.FP, n, files))
+			out = append(out, fmt.Sprintf("A  %s  -> allowlist (%s)", a.FP, s.spreadText(a.FP)))
 		}
 	}
 	return out
@@ -733,14 +756,13 @@ func (s *tuiState) statusLine() string {
 		case actAllowFile:
 			st = "planned: " + r.file + " -> allowlist (path:)"
 		case actAllowFP:
-			n, files := s.fpSpread(r.fp)
-			st = fmt.Sprintf("planned: fp %s -> allowlist, everywhere (%d findings in %d files)", r.fp, n, files)
+			st = fmt.Sprintf("planned: fp %s -> allowlist, everywhere (%s)", r.fp, s.spreadText(r.fp))
 		case actAllowFPHere:
 			st = fmt.Sprintf("planned: fp %s -> allowlist, in %s only", r.fp, r.file)
 		default:
 			st = fmt.Sprintf("fp %s", r.fp)
-			if n, files := s.fpSpread(r.fp); n > 1 {
-				st += fmt.Sprintf(" (%d findings in %d files)", n, files)
+			if n, _ := s.fpSpread(r.fp); n > 1 {
+				st += " (" + s.spreadText(r.fp) + ")"
 			}
 			if r.allowed {
 				st += "   in the allowlist"

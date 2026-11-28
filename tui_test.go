@@ -416,10 +416,14 @@ func TestTUIAHiddenOccurrences(t *testing.T) {
 	s := newTUIState(testRows())
 	fp := s.rows[1].fp // a.conf
 	s.hashes = map[string]string{"a.conf": "ha", "b.yaml": "hb", "c.sh": "hc", "hidden.conf": "hh"}
-	s.fpFiles = map[string]map[string]bool{fp: {"a.conf": true, "hidden.conf": true}}
+	s.fpFiles = map[string]map[string]int{fp: {"a.conf": 2, "hidden.conf": 1}}
 	keys(s, "home", "A")
 	if acts := s.planActions(); len(acts) != 1 || acts[0].Hashes["hidden.conf"] != "hh" {
 		t.Errorf("A: %+v", acts)
+	}
+	// the summary counts the hidden one too
+	if sum := strings.Join(s.summary(), ""); !strings.Contains(sum, "3 findings in 2 files, 1 of them allowed already") {
+		t.Errorf("summary: %s", sum)
 	}
 	// and a rescan where hidden.conf changed drops the mark
 	n := newTUIState(testRows())

@@ -456,7 +456,7 @@ func (a *tuiApp) scan() {
 	hashes := map[string]string{}
 	pem := map[string]bool{}
 	outside := 0
-	fpFiles := map[string]map[string]bool{}
+	fpFiles := map[string]map[string]int{}
 	// The scan sees every fingerprint (path: lines still skip files); the
 	// rows are the ones not allowed, or all in "show allowed" mode. A
 	// needs every file with the fingerprint, shown or not.
@@ -485,9 +485,9 @@ func (a *tuiApp) scan() {
 		sc.out = func(x Finding) {
 			fp := x.FP()
 			if fpFiles[fp] == nil {
-				fpFiles[fp] = map[string]bool{}
+				fpFiles[fp] = map[string]int{}
 			}
-			fpFiles[fp][rp] = true
+			fpFiles[fp][rp]++
 			allowed := allow.allowFP(fp, rp)
 			if allowed && !a.p.showAllowed {
 				return
