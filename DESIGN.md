@@ -895,6 +895,15 @@ does nothing. An explicit `-warn` or `-warn=false` wins.
 `train` with the keystore available first runs check 6 on its input. If any
 value is present it stops, so a value never becomes a dictionary word.
 
+That covers only the values the keystore knows. The model learns from the
+tree it then scans, so any key repeated in a few files becomes a word.
+`train -guard` scans every line with the built-in model first and does not
+count the letter fragments inside its findings, unless their fp is in the
+allowlist. `segscan model check` audits a model against the built-in one
+(and the keystore values), and `hook_model` in `.sec/config` (`off`, `warn`,
+`block`) runs it in the pre-commit hook on a changed staged model.
+`word:<word>` lines in the allowlist accept harmless words.
+
 ### 6.7 `drift`
 
 ```

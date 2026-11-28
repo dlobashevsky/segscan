@@ -20,8 +20,10 @@ import (
 
 const usage = `segscan - statistical secret scanner
 
-  segscan train [-m model] [-words list,...] [path...]
+  segscan train [-m model] [-words list,...] [-guard] [path...]
                                         train a model (no paths: git ls-files)
+  segscan model check [-m model] [-since REV]
+                                        dictionary words of the model that look like keys
   segscan scan  [flags] [path...|-]     scan files (no paths: git ls-files)
   segscan diff  [flags]                 scan the added lines of a unified diff on stdin
                                         (git log -p --all -U0 | segscan diff)
@@ -209,6 +211,8 @@ func main() {
 		cmdExpand(args)
 	case "import":
 		cmdImport(args)
+	case "model":
+		cmdModel(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -329,9 +333,10 @@ func filesOrGit(paths []string) []string {
 
 // ---------- commands ----------
 
-func train(files []string, allow *allowList, top, skip int, lists ...string) *Model {
+func train(files []string, allow *allowList, top, skip int, guard *trainGuardScan, lists ...string) *Model {
 	t := newTrainer()
 	t.skip = skip
+	t.guard = guard
 	for _, l := range lists {
 		data, err := os.ReadFile(l)
 		if err != nil {
@@ -354,6 +359,8 @@ func cmdTrain(args []string) {
 	fs, c := flags("train")
 	top := fs.Int("top", 0, "keep only the N most frequent corpus words in the dictionary")
 	words := fs.String("words", "", "comma-separated word lists (one word per line, a-z)")
+	guard := fs.Bool("guard", false, "leave out of the model every fragment inside a finding of the built-in model, unless its fp is in the allowlist")
+	guardBpc := fs.Float64("guard-bpc", 0, "with -guard: only findings with at least this many bits per char count")
 	fs.Parse(args)
 	c.finish(fs)
 	var lists []string
@@ -362,7 +369,17 @@ func cmdTrain(args []string) {
 	}
 	files := filesOrGit(fs.Args())
 	trainGuard(c, files, lists)
-	m := train(files, loadAllow(c.allow, !c.noDef), *top, c.o.Skip, lists...)
+	allow := loadAllow(c.allow, !c.noDef)
+	var g *trainGuardScan
+	if *guard {
+		if baseModel == nil {
+			die(fmt.Errorf("train -guard: no built-in model"))
+		}
+		o := c.o
+		o.MinBpc = *guardBpc // scan_bpc is for reporting, not for this
+		g = &trainGuardScan{sc: NewScanner(baseModel, o), allow: allow}
+	}
+	m := train(files, allow, *top, c.o.Skip, g, lists...)
 	path := modelPath(c.model)
 	if abs, err := filepath.Abs(path); err == nil && c.top != "" {
 		if err := repoDir(c.top, filepath.Dir(abs)); err != nil {
@@ -376,6 +393,10 @@ func cmdTrain(args []string) {
 		path, m.Files, m.Tokens, len(m.Words))
 	if m.Tokens < 200000 {
 		fmt.Fprintln(os.Stderr, "segscan: small corpus, expect many false positives: train on several repositories")
+	}
+	if g != nil {
+		fmt.Fprintf(os.Stderr, "segscan: train -guard: %d findings of the built-in model, %d of them allowed; %d fragments left out\n",
+			g.findings, g.allowed, g.dropped)
 	}
 }
 
@@ -676,6 +697,9 @@ func cmdHook(args []string) {
 	if c.sec != nil {
 		indexOnly = c.fromIndex()
 	}
+	if indexOnly && c.sec.HookModel != "off" {
+		c.hookModelCheck()
+	}
 	block := !*warn
 	if !c.set["warn"] && c.sec != nil {
 		switch c.sec.HookScan {
@@ -707,7 +731,7 @@ func cmdHook(args []string) {
 		if gerr != nil {
 			die(gerr)
 		}
-		m = train(files, loadAllow(c.allow, !c.noDef), 0, c.o.Skip)
+		m = train(files, loadAllow(c.allow, !c.noDef), 0, c.o.Skip, nil)
 		if err := m.save(path); err != nil {
 			die(err)
 		}

@@ -94,7 +94,8 @@ Check and commit:
 Train the statistical model on the repository once it has some content, and
 commit the model, so everyone's hook uses the same one:
 
-    segscan train          # writes .sec/segscan.model
+    segscan train -guard   # writes .sec/segscan.model
+    segscan model check    # no dictionary word may look like a key
     git add .sec/segscan.model && git commit -m 'segscan model'
 
 On the deploy machine, give the keys their values and build the files of a
@@ -202,6 +203,7 @@ Every form a chain produces is at most 64 KiB.
 | `skip_uuids` | `all` (placeholders and bare UUIDs are not scored by the statistical scan), `placeholders`, `off` |
 | `binary` | `scan` or `skip`, for the statistical scan (stage 5); check 6 always reads binary files |
 | `hook_scan` | the statistical part of the pre-commit hook: `warn` (print, do not block), `block`, `off` |
+| `hook_model` | `segscan model check` of a staged `.sec/segscan.model` that differs from `HEAD`'s: `off` (default), `warn`, `block` |
 | `scan_bpc` | statistical scan (`scan`, `diff`, `hook`, `calib`): report only findings with at least this many bits per char; `-bpc` wins. Our base58 keys score 5 and more; pick the value from the `bits_per_char` column of `segscan scan` on your repository. Default: no limit |
 | `scan_minlen` | statistical scan: ignore random-looking strings shorter than this; `-minlen` wins. Short demo passwords go with 10-12. Default 6 |
 | `forbid` | globs of paths that may never be committed |
@@ -490,13 +492,27 @@ of the model.
 
 The model, `.sec/segscan.model`, is committed with the rest of `.sec/`, so
 every clone and every hook scores the same way; the hook reads the staged
-one. It holds no text of the files, only letter statistics and a
-dictionary of lowercase letter fragments seen at least 3 times in at least
-2 files; long fragments that look random are kept out of it. Train only on
-a tree that is already clean (placeholders in, no live values): a secret
-that is in the corpus several times could otherwise become a word and
-score low. Retrain when the repository has grown, and commit the new
-model. `-m` or `$SEGSCAN_MODEL` point elsewhere for a one-off.
+one. It holds letter statistics and a dictionary of lowercase letter
+fragments seen at least 3 times in at least 2 files. Those fragments are
+text of the tree: a key copied into several files becomes a word, in
+clear, and the scan with that model no longer reports it. Check 6 above
+catches only values the keystore already knows. Hence:
+
+- train with `-guard`: a fragment inside a finding of the built-in model
+  is not learnt unless the finding's fp is in `.sec/allow` (`-guard-bpc N`:
+  only findings of at least N bits per char count). Review the findings of
+  the built-in model first, or the guarded model keeps reporting them;
+- run `segscan model check` before committing a model: it lists the
+  dictionary words of 6 letters or more that look random under the
+  built-in model (`-maxbpc`, default 4.0), and, with the keystore, the
+  words that are letter fragments of a value, current or retired. Exit 1
+  if there are any. `word:<word>` in `.sec/allow` accepts a harmless word;
+  `-since REV` also lists the words added since that revision's model;
+- `hook_model = block` in `.sec/config` makes the pre-commit hook run the
+  same check on a changed staged model.
+
+Retrain when the repository has grown, and commit the new model. `-m` or
+`$SEGSCAN_MODEL` point elsewhere for a one-off.
 
 Useful one-offs on a repository you take over:
 

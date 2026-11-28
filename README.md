@@ -17,7 +17,8 @@ No dependencies. The built-in model `base.model` is embedded into the binary.
     segscan scan .                           # the directory, untracked and ignored files too
     segscan scan conf/ app.yaml              # selected paths
     git log -p --all -U0 | segscan diff      # full history, unique findings
-    segscan train                            # repository model -> .git/segscan.model
+    segscan train -guard                     # repository model -> .git/segscan.model
+    segscan model check                      # dictionary words of the model that look like keys
     segscan explain 'X-API-Key: ...'         # why a line did (not) trigger
     segscan calib files...                   # noise and recall at the current thresholds
     segscan install                          # pre-commit hook in the current repository
@@ -64,6 +65,8 @@ about 3.5-4.5.
 - `.segscan-allow` in the repository root: one `fp` per line, or `path:glob`
   to skip files. `#` starts a comment.
 - `segscan:allow` on the line itself: the line is not scanned.
+- `word:<word>` in `.segscan-allow`: `model check` accepts that dictionary
+  word.
 - Lock files, `*.min.js` and `*.map` are always skipped
   (`-no-default-excludes` turns this off).
 - `-----BEGIN CERTIFICATE-----` blocks are skipped; a `PRIVATE KEY` block is
@@ -96,9 +99,38 @@ word lists) mixed 50/50 with the repository model. The character model is
 trained on the vocabulary, not on the token stream; otherwise a few very
 frequent identifiers drown the statistics.
 
-To keep secrets out of the dictionary during training, a word must occur at
-least 3 times in 2 files, and words of 6 letters or more must also be
-"pronounceable" under the character model.
+A word enters the dictionary if it occurs at least 3 times in 2 files, and,
+from 6 letters on, if it is "pronounceable": it costs at most 4.5 bits per
+letter under the character model.
+
+That does not keep keys out. The model learns from the same tree it then
+scans, so a key copied into three node configs becomes a dictionary word.
+It is then stored in clear in the model, and the scan with that model no
+longer reports it. The "pronounceable" test is made with the character
+model trained on that tree, which has learnt the key's letters too.
+
+Safeguards:
+
+- `segscan train -guard`: every line is first scanned with the built-in
+  model, and a letter fragment inside one of its findings is not counted,
+  unless the finding's fp is in the allowlist. Other occurrences of the
+  same fragment count as usual. A key is found only inside findings, so it
+  never becomes a word. The price: what the built-in model reports is
+  learnt only once its fp is in the allowlist, so a guarded model leaves
+  more false positives until they are reviewed. `-guard-bpc N` counts only
+  findings of at least N bits per char.
+- `segscan model check`: the dictionary words of length 6 and more that
+  look random under the built-in model (above 4.0 bits per letter, `-maxbpc`),
+  and, with the keystore, the words that are letter fragments of a value.
+  Exit 1 if there are any. A harmless word is accepted with a `word:<word>`
+  line in the allowlist. `-since REV` also lists the words added since the
+  model in that git revision.
+- `hook_model = warn` or `block` in `.sec/config`: the pre-commit hook runs
+  model check on a staged model that differs from `HEAD`'s. Off by default.
+
+A safe order: scan with the built-in model (no trained model yet), review
+the findings and put the false positives into the allowlist, `train
+-guard`, `model check`, commit the model.
 
 ## Thresholds
 

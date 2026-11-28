@@ -31,6 +31,7 @@ type secConfig struct {
 	SkipUUIDs  int
 	Binary     string // scan | skip
 	HookScan   string // warn | block | off
+	HookModel  string // off | warn | block: model check of a changed staged model
 	Forbid     []string
 	ScanBpc    float64 // statistical scan: report only findings with at least this many bits per char; 0: not set
 	ScanMinLen int     // statistical scan: minimum segment length; 0: not set
@@ -82,7 +83,7 @@ func loadSecConfig(top string) (*secConfig, error) {
 // of a line or after whitespace. Unknown keys are errors, so that a typo does
 // not silently fall back to a default.
 func parseSecConfig(data []byte, project string) (*secConfig, error) {
-	cfg := &secConfig{Project: project, Roots: []string{"nodes/*"}, SkipUUIDs: skipAll, Binary: "scan", HookScan: "warn"}
+	cfg := &secConfig{Project: project, Roots: []string{"nodes/*"}, SkipUUIDs: skipAll, Binary: "scan", HookScan: "warn", HookModel: "off"}
 	for no, l := range strings.Split(string(data), "\n") {
 		if msg := textLineProblem(l); msg != "" {
 			return nil, fmt.Errorf("line %d: %s", no+1, msg)
@@ -134,6 +135,11 @@ func parseSecConfig(data []byte, project string) (*secConfig, error) {
 				return nil, bad()
 			}
 			cfg.HookScan = v
+		case "hook_model":
+			if v != "warn" && v != "block" && v != "off" {
+				return nil, bad()
+			}
+			cfg.HookModel = v
 		case "forbid":
 			cfg.Forbid = splitList(v)
 		case "scan_bpc":

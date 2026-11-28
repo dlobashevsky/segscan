@@ -304,6 +304,7 @@ const listWordBits = 18 // cost of a word known only from a list
 
 type trainer struct {
 	skip   int // spans to leave out, as Opts.Skip
+	guard  *trainGuardScan
 	blank  []byte
 	frag   map[string]*fragStat
 	tokens uint64
@@ -352,8 +353,49 @@ func (t *trainer) addWords(data []byte) {
 	}
 }
 
+// trainGuardScan is train -guard: the built-in model scans every line
+// first, and a letter fragment inside one of its findings is not counted,
+// unless the allowlist has the finding's fp. A key copied into several
+// files would otherwise become a dictionary word and stop being reported.
+// Other occurrences of the same fragment count as usual.
+type trainGuardScan struct {
+	sc    *Scanner
+	allow *allowList
+	spans [][2]int // the findings on the current line
+
+	findings, allowed, dropped int
+}
+
+func (g *trainGuardScan) line(s []byte) {
+	g.spans = g.spans[:0]
+	if bytes.Contains(s, allowMarker) {
+		return
+	}
+	g.sc.Line(s, func(col int, text []byte, _, _ float64) {
+		g.findings++
+		if g.allow != nil && g.allow.fp[(&Finding{Text: string(text)}).FP()] {
+			g.allowed++
+			return
+		}
+		g.spans = append(g.spans, [2]int{col, col + len(text)})
+	})
+}
+
+// covers reports whether [from, to) overlaps a finding of the line.
+func (g *trainGuardScan) covers(from, to int) bool {
+	for _, sp := range g.spans {
+		if from < sp[1] && sp[0] < to {
+			return true
+		}
+	}
+	return false
+}
+
 // addLine collects and counts the letter fragments (words) of a line.
 func (t *trainer) addLine(s []byte) {
+	if t.guard != nil {
+		t.guard.line(s)
+	}
 	s = blankSpans(s, &t.blank, t.skip)
 	t.a = annotate(s, t.a)
 	fs := -1
@@ -362,6 +404,11 @@ func (t *trainer) addLine(s []byte) {
 			return
 		}
 		t.tokens++
+		if t.guard != nil && t.guard.covers(fs, end) {
+			t.guard.dropped++
+			fs = -1
+			return
+		}
 		if n := end - fs; n <= maxFragLen {
 			t.low = t.low[:0]
 			for _, b := range s[fs:end] {
