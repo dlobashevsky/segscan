@@ -123,7 +123,7 @@ no names, no placeholders, no transforms.
 |---|---|
 | the value is already in the keystore under name N | only puts N's placeholder in; if N's scope does not cover the file, offers to widen it |
 | a new name | `key add` + `key set` + placeholder |
-| the name exists with another value | not offered: that is a rotation, done by hand (`segscan key set NAME`) |
+| the name exists with another value | not offered: rotation is not the TUI's job (vault and other tools) |
 | the value has characters a key cannot hold (space, quotes, `\`, `#`, several lines) | not offered; it has to be a secret file (stage 3) |
 
 Keystores on different machines may hold different sets of keys; that is
@@ -211,18 +211,18 @@ only in memory and never holds values.
 3. Key names are typed by the user, in the format of `.sec/names`; the uuid
    comes from `key add`.
 4. The display of values and context is set in `.git/segscan-tui` (2).
-5. Rotation is done by hand.
+5. Rotation is out of scope: it belongs to vault and other tools.
+6. The TUI is written on the standard library only, inside segscan, and
+   uses its code directly (no running segscan as a command). Every action
+   still gets a non-interactive command, for tests and scripts.
+7. Keystore backups lie next to the keystore and are removed by hand.
 
 ## Open questions
 
-1. The TUI on the standard library only (raw terminal mode, ANSI escape
-   codes, own list and input widgets) or on a TUI library. segscan is one
-   `package main` with no dependencies. A library would either enter its
-   `go.mod`, or the TUI would have to live in a separate module and run
-   segscan as a command instead of using its code. Proposed: the standard
-   library; the screens needed are few (list, preview, status line, a few
-   dialogs and input fields).
-2. How long to keep keystore backups, or whether to keep only the last N.
-3. The model (`.sec/segscan.model`) can take a key into its dictionary;
-   see the separate issue. Until that is fixed, training on a tree that
-   still holds values is unsafe.
+1. The model (`.sec/segscan.model`). Trained on the repository and then
+   scanning the same repository, it learns what is "normal" from the very
+   files it checks: a key repeated in several node files becomes a
+   dictionary word and is no longer reported. The built-in model alone
+   gives too many false positives. The approach is under review
+   (a universal model, or another way to learn the vocabulary); until then,
+   training on a tree that still holds values is unsafe.
