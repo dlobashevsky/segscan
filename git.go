@@ -131,6 +131,7 @@ var defaultExcludes = []string{
 type allowList struct {
 	fp    map[string]bool
 	paths []string
+	words map[string]bool // word:<w>, dictionary words model check accepts
 }
 
 // loadAllow reads the file: each line is a fingerprint (fp) or "path:glob"; # starts a comment.
@@ -159,6 +160,11 @@ func (a *allowList) add(data []byte) {
 		}
 		if p, ok := strings.CutPrefix(f[0], "path:"); ok {
 			a.paths = append(a.paths, p)
+		} else if w, ok := strings.CutPrefix(f[0], "word:"); ok {
+			if a.words == nil {
+				a.words = map[string]bool{}
+			}
+			a.words[strings.ToLower(w)] = true
 		} else {
 			a.fp[strings.ToLower(f[0])] = true
 		}
