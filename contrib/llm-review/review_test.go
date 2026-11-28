@@ -222,3 +222,15 @@ func TestEval(t *testing.T) {
 		}
 	}
 }
+
+func TestNoServerNeeded(t *testing.T) {
+	dead := []string{"-url", "http://127.0.0.1:1"}
+	var out bytes.Buffer
+	if code := cmdScore(dead, strings.NewReader(""), &out); code != 0 || out.Len() != 0 {
+		t.Fatalf("empty input: exit %d, output %q", code, out.String())
+	}
+	in := `{"file":"k.pem","line":1,"col":1,"length":0,"kind":"private_key","fp":"ccc","text":"-----BEGIN RSA PRIVATE KEY-----"}`
+	if code := cmdScore(dead, strings.NewReader(in), &out); code != 0 || !strings.Contains(out.String(), `"llm_score":1.0000`) {
+		t.Fatalf("private key only: exit %d, output %q", code, out.String())
+	}
+}

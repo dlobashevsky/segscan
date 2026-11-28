@@ -148,51 +148,18 @@ func cmdScore(args []string, in io.Reader, out io.Writer) int {
 		return 0
 	}
 
-	cl := newClient(*url, *timeout)
-	if cl.model, err = cl.modelID(); err != nil {
-		return fail(fmt.Errorf("%v (is llama-server running at %s?)", err, *url))
-	}
-	fmt.Fprintf(os.Stderr, "llm-review: model %s, %d findings\n", cl.model, len(findings))
-
-	cache, err := openCache(*cachePath)
-	if err != nil {
-		return fail(err)
-	}
-	defer cache.close()
-
-	var st stats
-	t0 := time.Now()
-	work := make(chan int)
-	var wg sync.WaitGroup
-	for w := 0; w < max(*jobs, 1); w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range work {
-				key := promptKey(cl.model, prompts[i])
-				if s, ok := cache.get(key); ok {
-					res[i].score = s
-					st.add(verdict{}, true, nil)
-					continue
-				}
-				v, err := cl.ask(prompts[i])
-				res[i].score, res[i].err = v.Score, err
-				st.add(v, false, err)
-				if err == nil {
-					cache.put(key, v.Score)
-				}
-				st.progress(len(findings))
-			}
-		}()
-	}
-	for i := range res {
-		if !res[i].done {
-			work <- i
+	pending := 0
+	for _, r := range res {
+		if !r.done {
+			pending++
 		}
 	}
-	close(work)
-	wg.Wait()
-	st.report(time.Since(t0))
+	// Nothing to ask (a clean scan, or private keys only): no server needed.
+	if pending > 0 {
+		if code := askAll(newClient(*url, *timeout), *cachePath, *jobs, prompts, res); code != 0 {
+			return code
+		}
+	}
 
 	if *sortOut {
 		sort.SliceStable(res, func(a, b int) bool {
@@ -219,6 +186,56 @@ func cmdScore(args []string, in io.Reader, out io.Writer) int {
 	if failed > 0 {
 		return 1
 	}
+	return 0
+}
+
+// askAll scores the findings that are not done yet, cache first.
+func askAll(cl *client, cachePath string, jobs int, prompts [][]message, res []result) int {
+	var err error
+	if cl.model, err = cl.modelID(); err != nil {
+		return fail(fmt.Errorf("%v (is llama-server running at %s?)", err, cl.url))
+	}
+	fmt.Fprintf(os.Stderr, "llm-review: model %s, %d findings\n", cl.model, len(res))
+
+	cache, err := openCache(cachePath)
+	if err != nil {
+		return fail(err)
+	}
+	defer cache.close()
+
+	var st stats
+	t0 := time.Now()
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < max(jobs, 1); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				key := promptKey(cl.model, prompts[i])
+				if s, ok := cache.get(key); ok {
+					res[i].score = s
+					st.add(verdict{}, true, nil)
+					continue
+				}
+				v, err := cl.ask(prompts[i])
+				res[i].score, res[i].err = v.Score, err
+				st.add(v, false, err)
+				if err == nil {
+					cache.put(key, v.Score)
+				}
+				st.progress(len(res))
+			}
+		}()
+	}
+	for i := range res {
+		if !res[i].done {
+			work <- i
+		}
+	}
+	close(work)
+	wg.Wait()
+	st.report(time.Since(t0))
 	return 0
 }
 
