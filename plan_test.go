@@ -108,6 +108,16 @@ func TestCLIAllowFPScoped(t *testing.T) {
 	if _, errs, code := r.run("segscan", "allow", "path", "nodes/n1"); code == 0 || !strings.Contains(errs, "a directory") {
 		t.Errorf("allow path with a directory: exit %d %s", code, errs)
 	}
+	// A submodule not checked out: only a gitlink in the index.
+	r.must("git", "add", "app/x.conf")
+	r.must("git", "commit", "-q", "-m", "x", "--", "app/x.conf")
+	head := strings.TrimSpace(r.must("git", "rev-parse", "HEAD"))
+	r.must("git", "update-index", "--add", "--cacheinfo", "160000,"+head+",mod")
+	for _, args := range [][]string{{"allow", "path", "mod"}, {"allow", "fp", "-file", "mod", fp}, {"ignore", "mod"}} {
+		if _, errs, code := r.run("segscan", args...); code == 0 || !strings.Contains(errs, "a directory") {
+			t.Errorf("%v on a gitlink: exit %d %s", args, code, errs)
+		}
+	}
 	for _, g := range []string{"[", "/nodes/a[b/x", "/"} {
 		if _, errs, code := r.run("segscan", "allow", "fp", "-path", g, fp); code == 0 {
 			t.Errorf("-path %q: exit %d %s", g, code, errs)

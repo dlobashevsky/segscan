@@ -254,12 +254,19 @@ func (p *plan) gitState(f string) (tracked, inHead, skipWorktree bool) {
 	return
 }
 
-// indexDir reports whether the index holds files below f: a directory
-// git still tracks, even if it is gone from the working tree.
+// indexDir reports whether the index holds files below f (a directory
+// git still tracks, even if it is gone from the working tree) or f is a
+// gitlink (a submodule, checked out or not).
 func (p *plan) indexDir(f string) bool {
-	out, _ := exec.Command("git", "-C", p.top, "--literal-pathspecs", "ls-files", "-z", "--", f).Output()
+	out, _ := exec.Command("git", "-C", p.top, "--literal-pathspecs", "ls-files", "-s", "-z", "--", f).Output()
 	for _, e := range bytes.Split(out, []byte{0}) {
-		if bytes.HasPrefix(e, []byte(f+"/")) {
+		// mode SP object SP stage TAB path
+		tab := bytes.IndexByte(e, '\t')
+		if tab < 0 {
+			continue
+		}
+		name := e[tab+1:]
+		if bytes.HasPrefix(name, []byte(f+"/")) || (string(name) == f && bytes.HasPrefix(e, []byte("160000 "))) {
 			return true
 		}
 	}
